@@ -137,6 +137,7 @@ estr_writev (const struct iovec *iov, int iovcnt)
 
 
 #ifndef HAVE_VSNPRINTF
+#if 0
 static int
 gf_vsnprintf (char *str, size_t size, const char *format, va_list ap)
 {
@@ -160,6 +161,7 @@ gf_vsnprintf (char *str, size_t size, const char *format, va_list ap)
 }
 
 #define vsnprintf gf_vsnprintf
+#endif
 #endif
 
 
