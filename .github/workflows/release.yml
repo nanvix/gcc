@@ -89,6 +89,6 @@ jobs:
 
           This release contains the complete GCC toolchain configured for the Nanvix operating system target (i686-nanvix).
         files: |
-          ${{ steps.commit_info.outputs.release_name }}.zip
+          ${{ steps.commit_info.outputs.release_name }}-stage0.zip
         draft: false
         prerelease: false
