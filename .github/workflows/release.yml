@@ -21,7 +21,6 @@ on:
 
 env:
   GCC_VERSION: 12.4.0                          # Version of the GCC toolchain.
-  GCC_BRANCH: nanvix/v${{ env.GCC_VERSION }}   # Branch for the GCC toolchain.
   RELEASE_INSTALL_LOCATION: /opt/nanvix        # Directory where GCC will be installed for release.
 
 #==================================================================================================
@@ -58,15 +57,17 @@ jobs:
         SHORT_SHA=$(git rev-parse --short HEAD)
         TAG_NAME="nanvix-${{ env.GCC_VERSION }}-${SHORT_SHA}"
         RELEASE_NAME="nanvix-gcc-${{ env.GCC_VERSION }}-${SHORT_SHA}"
+        GCC_BRANCH="nanvix/v${{ env.GCC_VERSION }}"
         echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
         echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
         echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+        echo "gcc_branch=${GCC_BRANCH}" >> $GITHUB_OUTPUT
 
-    - name: Fast-forward ${{ env.GCC_BRANCH }} branch to dev
+    - name: Fast-forward ${{ steps.commit_info.outputs.gcc_branch }} branch to dev
       run: |
         git fetch origin
-        git checkout -B ${{ env.GCC_BRANCH }} origin/dev
-        git push origin ${{ env.GCC_BRANCH }}
+        git checkout -B ${{ steps.commit_info.outputs.gcc_branch }} origin/dev
+        git push origin ${{ steps.commit_info.outputs.gcc_branch }}
 
     - name: Create release archive (stage 0)
       run: ./z release --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }} --stage=0
