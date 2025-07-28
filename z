@@ -1,0 +1,568 @@
+#!/bin/bash
+
+# Utility for building and installing GCC for the Nanvix operating system.
+# Usage: ./z COMMAND [OPTIONS]
+
+set -euo pipefail
+
+#==================================================================================================
+# Global Constants
+#==================================================================================================
+
+# Script Directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+## Command Names
+BUILD_CMD_NAME="build"
+CONFIGURE_CMD_NAME="configure"
+HELP_CMD_NAME="help"
+INSTALL_CMD_NAME="install"
+RELEASE_CMD_NAME="release"
+SETUP_CMD_NAME="setup"
+
+# Option Names
+STAGE_OPT_NAME="--stage"
+INSTALL_LOCATION_OPT_NAME="--install-location"
+PARALLEL_BUILD_OPT_NAME="--parallel-build"
+RELEASE_NAME_OPT_NAME="--release-name"
+
+# Default Values
+DEFAULT_TARGET="i686-nanvix"
+DEFAULT_STAGE="0"
+DEFAULT_INSTALL_LOCATION="$HOME"
+DEFAULT_RELEASE_NAME="nanvix-gcc"
+
+# Required Build Tools (tool_name => minimum_version)
+declare -A REQUIRED_TOOLS=(
+    ["gcc"]="13.3.0"
+    ["make"]="4.3.0"
+    ["unzip"]="6.0.0"
+    ["wget"]="1.21.4"
+    ["zip"]="3.0.0"
+)
+
+# Required System Packages for Setup
+REQUIRED_PACKAGES=("build-essential" "unzip" "wget" "zip")
+
+# Binutils Version
+BINUTILS_VERSION="v2.40"
+# The short commit hash corresponds to the specific commit in the nanvix/binutils repository
+# used to generate the release. This hash can be found in the repository's commit history:
+# https://github.com/nanvix/binutils/commit/${BINUTILS_SHORT_COMMIT_HASH}
+BINUTILS_SHORT_COMMIT_HASH="44805e3582"
+BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.zip"
+BINUTILS_SHA256_CHECKSUM="sha256:51baa2c81c8cfbe76d9a6f09f7311e29cfb0dc4eaca2188e3f5849e1289ad885"
+
+# Build Targets
+BUILD_TARGETS_STAGE_0=("all-gcc" "all-target-libgcc")
+BUILD_TARGETS_STAGE_1=("all-gcc" "all-target-libgcc" "all-target-libgfortran" "all-target-libstdc++-v3")
+
+# Install Targets
+INSTALL_TARGETS_STAGE_0=("install-gcc" "install-target-libgcc")
+INSTALL_TARGETS_STAGE_1=("install-gcc" "install-target-libgcc" "install-target-libgfortran" "install-target-libstdc++-v3")
+
+#==================================================================================================
+# Global Variables
+#==================================================================================================
+
+TARGET="${DEFAULT_TARGET}"
+STAGE="${DEFAULT_STAGE}"
+INSTALL_LOCATION="$DEFAULT_INSTALL_LOCATION"
+PARALLEL_BUILD=""
+RELEASE_NAME="$DEFAULT_RELEASE_NAME"
+
+#==================================================================================================
+# Functions
+#==================================================================================================
+
+# Prints an error message in red.
+print_error() {
+    echo -e "\033[31mERROR: $1\033[0m" >&2
+}
+
+# Checks if the current user is the root user.
+is_root_user() {
+    [[ $EUID -eq 0 ]]
+}
+
+# Compare two version strings (e.g., "13.3.0" vs "13.2.5").
+# Returns 0 (true) if version1 is greater than or equal to version2,
+# and returns 1 (false) if version1 is less than version2.
+compare_tool_version() {
+    local version1="$1"
+    local version2="$2"
+
+    # Split versions into arrays
+    IFS='.' read -ra v1_parts <<< "$version1"
+    IFS='.' read -ra v2_parts <<< "$version2"
+
+    # Pad arrays to same length with zeros
+    local max_length=$(( ${#v1_parts[@]} > ${#v2_parts[@]} ? ${#v1_parts[@]} : ${#v2_parts[@]} ))
+
+    local i
+
+    # Default to 0 for missing version parts to ensure proper comparison (e.g., "4.3" vs "4.3.0").
+    for ((i=0; i<max_length; i++)); do
+        local part1=${v1_parts[i]:-0}
+        local part2=${v2_parts[i]:-0}
+
+        if ((part1 > part2)); then
+            return 0
+        elif ((part1 < part2)); then
+            return 1
+        fi
+    done
+
+    # versions are equal
+    return 0
+}
+
+# Normalize a version string to have 3 parts (e.g., "4.3" -> "4.3.0").
+normalize_tool_version() {
+    local version="$1"
+    local parts=0
+    IFS='.' read -ra arr <<< "$version"
+    parts=${#arr[@]}
+    if (( parts < 3 )); then
+        while (( parts < 3 )); do
+            version="${version}.0"
+            ((parts++))
+        done
+    fi
+    echo "$version"
+}
+
+# Get the version of a tool.
+get_tool_version() {
+    local tool="$1"
+    local version
+    case "$tool" in
+        gcc | make | wget | zip)
+            version=$("$tool" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)
+            ;;
+        unzip)
+            version=$("$tool" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)
+            ;;
+        *)
+            print_error "Unknown tool '$tool'"
+            exit 1
+            ;;
+    esac
+
+    # Check if version is empty
+    if [[ -z "$version" ]]; then
+        print_error "Unable to determine $tool version"
+        exit 1
+    fi
+
+    echo "$version"
+}
+
+# Check for required development tools.
+check_required_tools() {
+    echo "Checking for required development tools..."
+
+    for tool in "${!REQUIRED_TOOLS[@]}"; do
+        local min_version="${REQUIRED_TOOLS[$tool]}"
+
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            print_error "$tool is not installed or not in PATH"
+            exit 1
+        fi
+
+        # Get version string.
+        local version
+        version=$(get_tool_version "$tool")
+        if [[ -z "$version" ]]; then
+            print_error "Unable to determine $tool version"
+            exit 1
+        fi
+
+        # Normalize version to three parts for consistent comparison.
+        version=$(normalize_tool_version "$version")
+
+        # Check if tool version is older than the minimum required version.
+        if ! compare_tool_version "$version" "$min_version"; then
+            print_error "$tool version $version is too old (required >= $min_version)"
+            exit 1
+        fi
+
+        echo "$tool $version found"
+    done
+
+    echo "All required tools are available."
+}
+
+# Validate OS compatibility.
+check_os_compatibility() {
+    # Check if running on Linux
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        print_error "Unsupported operating system"
+        exit 1
+    fi
+
+    # Check if os-release file exists
+    if [[ ! -f /etc/os-release ]]; then
+        print_error "Cannot determine OS version"
+        exit 1
+    fi
+
+    # Get OS information from /etc/os-release.
+    OS_ID=""
+    OS_VERSION_ID=""
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ID)
+                OS_ID="${value%\"}"
+                OS_ID="${OS_ID#\"}"
+                ;;
+            VERSION_ID)
+                OS_VERSION_ID="${value%\"}"
+                OS_VERSION_ID="${OS_VERSION_ID#\"}"
+                ;;
+        esac
+    done < /etc/os-release
+
+    # Check if OS is not Ubuntu
+    if [[ "$OS_ID" != "ubuntu" ]]; then
+        print_error "Unsupported operating system '$OS_ID'"
+        exit 1
+    fi
+
+    # Check if version is not 24.04
+    if [[ "$OS_VERSION_ID" != "24.04" ]]; then
+        print_error "Unsupported Ubuntu version '$OS_VERSION_ID'"
+        exit 1
+    fi
+}
+
+# Display help message.
+show_help() {
+    cat << EOF
+Utility for building and installing GCC for the Nanvix operating system.
+
+Usage: ./z COMMAND   [OPTIONS]
+       ./z ${BUILD_CMD_NAME}     [${PARALLEL_BUILD_OPT_NAME}=N] [${STAGE_OPT_NAME}=0|1]
+       ./z ${CONFIGURE_CMD_NAME} [${INSTALL_LOCATION_OPT_NAME}=PATH]
+       ./z ${HELP_CMD_NAME}
+       ./z ${INSTALL_CMD_NAME}   [${STAGE_OPT_NAME}=0|1]
+       ./z ${RELEASE_CMD_NAME}   [${RELEASE_NAME_OPT_NAME}=NAME] [${PARALLEL_BUILD_OPT_NAME}=N] [${INSTALL_LOCATION_OPT_NAME}=PATH] [${STAGE_OPT_NAME}=0|1]
+       ./z ${SETUP_CMD_NAME}
+
+Commands:
+  ${BUILD_CMD_NAME}        Build GCC for Nanvix
+  ${CONFIGURE_CMD_NAME}    Configure GCC for Nanvix
+  ${HELP_CMD_NAME}         Print help
+  ${INSTALL_CMD_NAME}      Install GCC for Nanvix
+  ${RELEASE_CMD_NAME}      Create a release of GCC for Nanvix
+  ${SETUP_CMD_NAME}        Install required packages to build GCC for Nanvix
+
+Options:
+  ${STAGE_OPT_NAME}=0|1              Set the stage to '0' or '1'             (defaults to '${DEFAULT_STAGE}')
+  ${INSTALL_LOCATION_OPT_NAME}=PATH  Set install location to 'PATH'          (defaults to '${DEFAULT_INSTALL_LOCATION}')
+  ${PARALLEL_BUILD_OPT_NAME}=N       Use 'N' parallel threads when building  (defaults to using all available CPU cores)
+  ${RELEASE_NAME_OPT_NAME}=NAME      Set the release name to 'NAME'          (defaults to '${DEFAULT_RELEASE_NAME}')
+EOF
+}
+
+# Download and extract Binutils for Nanvix.
+download_binutils() {
+    echo "Downloading Binutils for Nanvix..."
+    echo "URL: $BINUTILS_URL"
+
+    # Ensure that current use is not root.
+    if is_root_user; then
+        print_error "This script should not be run as root."
+        echo "Hint: run this script as a regular user."
+        exit 1
+    fi
+
+    local binutils_zip="/tmp/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.zip"
+
+    # Attempt to create the installation directory if it does not exist.
+    mkdir -p "$INSTALL_LOCATION" || {
+        print_error "Failed to create installation directory: $INSTALL_LOCATION"
+        echo "Hint: Do you have write permissions to $INSTALL_LOCATION?"
+        exit 1
+    }
+
+    # Download Binutils, if it does not already exist.
+    if [[ ! -f "$binutils_zip" ]]; then
+        echo "Downloading Binutils from $BINUTILS_URL"
+        wget -q "$BINUTILS_URL" -O "${binutils_zip}" || {
+            print_error "Failed to download Binutils from $BINUTILS_URL"
+            exit 1
+        }
+
+        # Verify the checksum of the downloaded file.
+        echo "Verifying checksum of the downloaded file..."
+        local expected_checksum=${BINUTILS_SHA256_CHECKSUM#sha256:}
+        local actual_checksum
+        actual_checksum=$(sha256sum "$binutils_zip" | awk '{print $1}')
+
+        if [[ "$actual_checksum" != "$expected_checksum" ]]; then
+            print_error "Checksum verification failed for ${binutils_zip}"
+            echo "Expected: $expected_checksum"
+            echo "Actual:   $actual_checksum"
+            exit 1
+        fi
+    fi
+
+    # Extract Binutils to the installation location.
+    echo "Extracting Binutils to $INSTALL_LOCATION"
+    unzip -q "$binutils_zip" -d "$INSTALL_LOCATION" || {
+        print_error "Failed to extract Binutils from $binutils_zip"
+        exit 1
+    }
+
+    # Fix ownership of the extracted files.
+    # This is safe because we are not running this script as root.
+    echo "Fixing ownership of the extracted files..."
+    chown -R "$(id -u):$(id -g)" "$INSTALL_LOCATION" || {
+        print_error "Failed to fix ownership of the extracted files"
+        exit 1
+    }
+}
+
+# Configure GCC for Nanvix
+configure_gcc() {
+    echo "Configuring GCC for Nanvix..."
+    echo "Target: $TARGET"
+    echo "Install location: $INSTALL_LOCATION"
+
+    # Check for required development tools
+    check_required_tools
+
+    # Download pre-requisites, if required.
+    ./contrib/download_prerequisites
+
+    # Download and extract Binutils for Nanvix.
+    download_binutils
+
+    # Create build directory and change to it.
+    mkdir -p build || { print_error "Failed to create build directory"; exit 1; }
+    cd build || { print_error "Failed to change directory to build"; exit 1; }
+
+    # Add Binutils to PATH
+    OLD_PATH="$PATH"
+    export PATH="$INSTALL_LOCATION/bin:${PATH}"
+
+    ../configure \
+        --target="${TARGET}" \
+        --prefix="${INSTALL_LOCATION}" \
+        --with-sysroot="${INSTALL_LOCATION}" \
+        --disable-multilib \
+        --disable-nls \
+        --enable-languages=c,c++,fortran  \
+        --disable-libquadmath \
+        --disable-libquadmath-support \
+        --with-newlib
+
+    # Restore original PATH.
+    export PATH="${OLD_PATH}"
+
+    echo "Configuration completed successfully."
+}
+
+# Build GCC.
+build_gcc() {
+    echo "Building GCC for Nanvix..."
+
+    # Check for required development tools
+    check_required_tools
+
+    # Enter build directory, if not already there.
+    if [[ "$(basename "$PWD")" != "build" ]]; then
+        cd build || { print_error "Failed to change directory to build"; exit 1; }
+    fi
+
+    local build_targets=()
+
+    if [[ "${STAGE}" == "0" ]]; then
+        build_targets=("${BUILD_TARGETS_STAGE_0[@]}")
+    elif [[ "${STAGE}" == "1" ]]; then
+        build_targets=("${BUILD_TARGETS_STAGE_1[@]}")
+    else
+        print_error "Invalid stage '$STAGE'. Use '0' or '1'."
+        exit 1
+    fi
+
+    local parallel_build_option
+    if [[ -n "$PARALLEL_BUILD" ]]; then
+        if ! [[ "$PARALLEL_BUILD" =~ ^[0-9]+$ ]] || [[ "$PARALLEL_BUILD" -le 0 ]]; then
+            print_error "${PARALLEL_BUILD_OPT_NAME} must be a positive integer greater than zero"
+            exit 1
+        fi
+        echo "Using $PARALLEL_BUILD parallel jobs"
+        parallel_build_option="${PARALLEL_BUILD}"
+    else
+        echo "Using all available CPU cores ($(nproc))"
+        parallel_build_option="$(nproc)"
+    fi
+
+    make -j "${parallel_build_option}" "${build_targets[@]}"
+
+    echo "Build completed successfully."
+}
+
+# Install GCC
+install_gcc() {
+    echo "Installing GCC for Nanvix..."
+    echo "Install location: $INSTALL_LOCATION"
+
+    # Enter build directory, if not already there.
+    if [[ "$(basename "$PWD")" != "build" ]]; then
+        cd build || { print_error "Failed to change directory to build"; exit 1; }
+    fi
+
+    local install_targets=()
+    if [[ "${STAGE}" == "0" ]]; then
+        install_targets=("${INSTALL_TARGETS_STAGE_0[@]}")
+    elif [[ "${STAGE}" == "1" ]]; then
+        install_targets=("${INSTALL_TARGETS_STAGE_1[@]}")
+    else
+        print_error "Invalid stage '$STAGE'. Use '0' or '1'."
+        exit 1
+    fi
+
+    make "${install_targets[@]}"
+
+    echo "Installation completed successfully."
+}
+
+# Release GCC
+release_gcc() {
+    configure_gcc
+    build_gcc
+    install_gcc
+
+    echo "Creating release..."
+    local zip_file_name="${RELEASE_NAME}-stage${STAGE}.zip"
+    pushd "$INSTALL_LOCATION" || { print_error "Failed to change directory to ${INSTALL_LOCATION}"; exit 1; }
+    zip -r "${SCRIPT_DIR}/${zip_file_name}" .
+    popd || { print_error "Failed to return to the previous directory after creating the release"; exit 1; }
+    echo "Release created: ${SCRIPT_DIR}/${zip_file_name}"
+}
+
+# Setup required system packages listed in REQUIRED_PACKAGES
+setup_packages() {
+    echo "Setting up required system packages for GCC..."
+
+    # Check if running as root
+    if [[ $EUID -eq 0 ]]; then
+        echo "Running as root - proceeding with package installation"
+    else
+        echo "Checking if sudo is available..."
+        if ! command -v sudo >/dev/null 2>&1; then
+            print_error "sudo is not available"
+            exit 1
+        fi
+        echo "Will use sudo for package installation"
+    fi
+
+    # Update package list
+    echo "Updating package list..."
+    if [[ $EUID -eq 0 ]]; then
+        apt-get update
+    else
+        sudo apt-get update
+    fi
+
+    # Install missing packages from REQUIRED_PACKAGES
+    echo "Installing packages:" "${REQUIRED_PACKAGES[@]}"
+    if [[ $EUID -eq 0 ]]; then
+        apt-get install -y "${REQUIRED_PACKAGES[@]}"
+    else
+        sudo apt-get install -y "${REQUIRED_PACKAGES[@]}"
+    fi
+    echo "Package installation completed successfully."
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]] ; do
+        case $1 in
+            "${STAGE_OPT_NAME}="*)
+                STAGE="${1#*=}"
+                if [[ "$STAGE" != "0" && "$STAGE" != "1" ]]; then
+                    print_error "Invalid stage '$STAGE'. Use '0' or '1'."
+                    exit 1
+                fi
+                shift
+                ;;
+
+            "${INSTALL_LOCATION_OPT_NAME}="*)
+                INSTALL_LOCATION="${1#*=}"
+                shift
+                ;;
+            "${PARALLEL_BUILD_OPT_NAME}="*)
+                PARALLEL_BUILD="${1#*=}"
+                shift
+                ;;
+            "${RELEASE_NAME_OPT_NAME}="*)
+                RELEASE_NAME="${1#*=}"
+                shift
+                ;;
+            *)
+                print_error "Unknown option '$1'"
+                exit 1
+                ;;
+        esac
+    done
+}
+
+#==================================================================================================
+# Main Script
+#==================================================================================================
+
+# Main function
+main() {
+    # Validate OS compatibility first
+    check_os_compatibility
+
+    # Check if no command was specified.
+    if [[ $# -eq 0 ]]; then
+        print_error "No command specified."
+        show_help
+        exit 1
+    fi
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        "${BUILD_CMD_NAME}")
+            parse_args "$@"
+            build_gcc
+            ;;
+        "${CONFIGURE_CMD_NAME}")
+            parse_args "$@"
+            configure_gcc
+            ;;
+        "${HELP_CMD_NAME}")
+            show_help
+            ;;
+        "${INSTALL_CMD_NAME}")
+            parse_args "$@"
+            install_gcc
+            ;;
+        "${RELEASE_CMD_NAME}")
+            parse_args "$@"
+            release_gcc
+            ;;
+        "${SETUP_CMD_NAME}")
+            parse_args "$@"
+            setup_packages
+            ;;
+        *)
+            print_error "Unknown command '$command'"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function with all arguments
+main "$@"
+
+exit 0
