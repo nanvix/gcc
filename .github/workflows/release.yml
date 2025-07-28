@@ -1,0 +1,93 @@
+# Copyright(c) The Maintainers of Nanvix.
+# Licensed under the MIT License.
+
+name: Release Pipeline
+
+#==================================================================================================
+# Trigger Conditions
+#==================================================================================================
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types:
+      - completed
+    branches:
+      - dev
+
+#==================================================================================================
+# Environment Variables
+#==================================================================================================
+
+env:
+  GCC_VERSION: 12.4.0                          # Version of the GCC toolchain.
+  GCC_BRANCH: nanvix/v${{ env.GCC_VERSION }}   # Branch for the GCC toolchain.
+  RELEASE_INSTALL_LOCATION: /opt/nanvix        # Directory where GCC will be installed for release.
+
+#==================================================================================================
+# Jobs
+#==================================================================================================
+
+jobs:
+  release:
+    # Only run if the triggering workflow completed successfully
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write  # Required for creating releases, tags, and updating branches
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.workflow_run.head_branch }}  # Check out the branch that triggered the workflow
+        fetch-depth: 0                                     # Fetch all history for branch operations
+
+    - name: Setup Git configuration
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Install dependencies
+      run: sudo ./z setup
+
+    - name: Get commit information
+      id: commit_info
+      run: |
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        TAG_NAME="nanvix-${{ env.GCC_VERSION }}-${SHORT_SHA}"
+        RELEASE_NAME="nanvix-gcc-${{ env.GCC_VERSION }}-${SHORT_SHA}"
+        echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+        echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+        echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+
+    - name: Fast-forward ${{ env.GCC_BRANCH }} branch to dev
+      run: |
+        git fetch origin
+        git checkout -B ${{ env.GCC_BRANCH }} origin/dev
+        git push origin ${{ env.GCC_BRANCH }}
+
+    - name: Create release archive (stage 0)
+      run: ./z release --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }} --stage=0
+
+    - name: Create release tag
+      run: |
+        git tag ${{ steps.commit_info.outputs.tag_name }}
+        git push origin ${{ steps.commit_info.outputs.tag_name }}
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.commit_info.outputs.tag_name }}
+        name: "${{ steps.commit_info.outputs.tag_name }}"
+        body: |
+          Automated release of Nanvix GCC ${{ env.GCC_VERSION }}
+
+          Built from commit: ${{ github.sha }}
+
+          This release contains the complete GCC toolchain configured for the Nanvix operating system target (i686-nanvix).
+        files: |
+          ${{ steps.commit_info.outputs.release_name }}.zip
+        draft: false
+        prerelease: false
