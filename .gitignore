@@ -70,3 +70,6 @@ stamp-*
 
 # Build artifacts.
 /build/
+
+.z.config
+nanvix-gcc.tar.bz2
