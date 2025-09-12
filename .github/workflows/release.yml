@@ -24,8 +24,6 @@ env:
   GCC_VERSION: "12.4.0"
   # Directory where GCC will be installed.
   RELEASE_INSTALL_LOCATION: /opt/nanvix
-  # Directory where the sysroot is located.
-  RELEASE_SYSROOT_LOCATION: /opt/nanvix
 
 #==================================================================================================
 # Jobs
@@ -75,7 +73,7 @@ jobs:
 
 
     - name: Configure build (stage 0)
-      run: ./z configure --sysroot-location=${{ env.RELEASE_SYSROOT_LOCATION }} --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }}-stage0 --stage=0
+      run: ./z configure --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }}-stage0 --stage=0
 
     - name: Create release archive (stage 0)
       run: ./z release

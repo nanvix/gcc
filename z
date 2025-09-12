@@ -26,7 +26,7 @@ set -euo pipefail
 # Import Utils Script
 #==================================================================================================
 
-UTILS_SCRIPT_VERSION="cbd2891623ed91ef6c69519c1f6e97aec43f40e8"
+UTILS_SCRIPT_VERSION="f8b25adabc6a88cc7c76a4439f5a3e857ba386a1"
 UTILS_SCRIPT_URL="https://raw.githubusercontent.com/nanvix/scripts/${UTILS_SCRIPT_VERSION}/utils.sh"
 
 utils_script="/tmp/utils-${UTILS_SCRIPT_VERSION}.sh"
@@ -91,9 +91,9 @@ readonly INSTALL_TARGETS_STAGE_1=("install-gcc" "install-target-libgcc" "install
 
 # Binutils.
 readonly BINUTILS_VERSION="2.40"
-readonly BINUTILS_SHORT_COMMIT_HASH="6cc7261834"
+readonly BINUTILS_SHORT_COMMIT_HASH="30f089e443"
 readonly BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.tar.bz2"
-readonly BINUTILS_SHA256_CHECKSUM="sha256:96249748fdfa13edaa450c5ac3747c16bb15d9b06459d98c8fdcdef92fb441b6"
+readonly BINUTILS_SHA256_CHECKSUM="sha256:3b3e4b82792fbaee9f541c38c71428ccfe725ff26b926de0691d5817fd25a218"
 
 #==================================================================================================
 # Project-Specific Functions
@@ -110,19 +110,24 @@ readonly BINUTILS_SHA256_CHECKSUM="sha256:96249748fdfa13edaa450c5ac3747c16bb15d9
 #   - On failure, this function returns non-zero.
 #
 download_steps() {
+
     # Download pre-requisites.
     ./contrib/download_prerequisites
 
-    # Download and extract Binutils
-    local binutils_tar_bz2_file
-    binutils_tar_bz2_file=$(download "$BINUTILS_URL" "$BINUTILS_SHA256_CHECKSUM") || {
-        print_error "Failed to download Binutils."
-        return 1
-    }
-    extract_tar_bz2 "$binutils_tar_bz2_file" "$Z_SYSROOT_LOCATION" || {
-        print_error "Failed to extract Binutils."
-        return 1
-    }
+    # Download and extract Binutils if sysroot location is not set.
+    if [[ -z "${Z_SYSROOT_LOCATION}" ]]; then
+        local sysroot_location="${Z_INSTALL_LOCATION}"
+
+        local binutils_tar_bz2_file
+        binutils_tar_bz2_file=$(download "$BINUTILS_URL" "$BINUTILS_SHA256_CHECKSUM") || {
+            print_error "Failed to download Binutils."
+            return 1
+        }
+        extract_tar_bz2 "$binutils_tar_bz2_file" "$sysroot_location" || {
+            print_error "Failed to extract Binutils."
+            return 1
+        }
+    fi
 
     return 0
 }
@@ -142,10 +147,12 @@ download_steps() {
 #   configure_steps "i686-nanvix" "/usr/local"
 #
 configure_steps() {
+    local sysroot_location="${Z_SYSROOT_LOCATION:-${Z_INSTALL_LOCATION}}"
+
     ../configure \
         --target="${Z_TARGET}" \
         --prefix="${Z_INSTALL_LOCATION}" \
-        --with-sysroot="${Z_SYSROOT_LOCATION}" \
+        --with-sysroot="${sysroot_location}" \
         --disable-multilib \
         --disable-nls \
         --enable-languages=c,c++,fortran  \
