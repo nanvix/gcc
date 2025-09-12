@@ -26,7 +26,7 @@ set -euo pipefail
 # Import Utils Script
 #==================================================================================================
 
-UTILS_SCRIPT_VERSION="c32dcfff12f5b7d039ef75e1619b24c6a8182b3e"
+UTILS_SCRIPT_VERSION="a9291960bef131ac85fe66bfdc0fdfd2ddc278c4"
 UTILS_SCRIPT_URL="https://raw.githubusercontent.com/nanvix/scripts/${UTILS_SCRIPT_VERSION}/utils.sh"
 
 utils_script="/tmp/utils-${UTILS_SCRIPT_VERSION}.sh"
@@ -91,9 +91,9 @@ readonly INSTALL_TARGETS_STAGE_1=("install-gcc" "install-target-libgcc" "install
 
 # Binutils.
 readonly BINUTILS_VERSION="2.40"
-readonly BINUTILS_SHORT_COMMIT_HASH="c762396e71"
+readonly BINUTILS_SHORT_COMMIT_HASH="329366cc2e"
 readonly BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.tar.bz2"
-readonly BINUTILS_SHA256_CHECKSUM="sha256:2e7a51dc2e07e6d07bff3f44044c2e9710b2c74afd9044fdcafde47702b38e89"
+readonly BINUTILS_SHA256_CHECKSUM="sha256:48e7d2709eef5b0422519ceb3ce529eccda40365331f873d0d15e3142328f9e3"
 
 # NewLib
 readonly NEWLIB_VERSION="4.4.0"
