@@ -71,11 +71,16 @@ jobs:
         git checkout -B ${{ steps.commit_info.outputs.gcc_branch }} origin/dev
         git push origin ${{ steps.commit_info.outputs.gcc_branch }}
 
-
     - name: Configure build (stage 0)
       run: ./z configure --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }}-stage0 --stage=0
 
     - name: Create release archive (stage 0)
+      run: ./z release
+
+    - name: Configure build (stage 1)
+      run: ./z configure --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }}-stage1 --stage=1
+
+    - name: Create release archive (stage 1)
       run: ./z release
 
     - name: Create release tag
@@ -96,5 +101,6 @@ jobs:
           This release contains the complete GCC toolchain configured for the Nanvix operating system target (i686-nanvix).
         files: |
           ${{ steps.commit_info.outputs.release_name }}-stage0.tar.bz2
+          ${{ steps.commit_info.outputs.release_name }}-stage1.tar.bz2
         draft: false
         prerelease: false

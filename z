@@ -95,6 +95,12 @@ readonly BINUTILS_SHORT_COMMIT_HASH="30f089e443"
 readonly BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.tar.bz2"
 readonly BINUTILS_SHA256_CHECKSUM="sha256:3b3e4b82792fbaee9f541c38c71428ccfe725ff26b926de0691d5817fd25a218"
 
+# NewLib
+readonly NEWLIB_VERSION="4.4.0"
+readonly NEWLIB_SHORT_COMMIT_HASH="afb7d0361"
+readonly NEWLIB_URL="https://github.com/nanvix/gcc/releases/download/nanvix-v${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}/nanvix-gcc-${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}.tar.bz2"
+readonly NEWLIB_SHA256_CHECKSUM="sha256:bef4832969261bb5e75cbd615fb796724bcdca0a27d2b2ac55b3822e5e6db633"
+
 #==================================================================================================
 # Project-Specific Functions
 #==================================================================================================
@@ -127,6 +133,19 @@ download_steps() {
             print_error "Failed to extract Binutils."
             return 1
         }
+
+        # Download and extract NewLib if configuring stage 1.
+        if [[ "${Z_STAGE}" == "1" ]]; then
+            local newlib_tar_bz2_file
+            newlib_tar_bz2_file=$(download "$NEWLIB_URL" "$NEWLIB_SHA256_CHECKSUM") || {
+                print_error "Failed to download NewLib."
+                return 1
+            }
+            extract_tar_bz2 "$newlib_tar_bz2_file" "${sysroot_location}" || {
+                print_error "Failed to extract NewLib."
+                return 1
+            }
+        fi
     fi
 
     return 0
