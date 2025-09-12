@@ -77,7 +77,6 @@ jobs:
     - name: Configure build (stage 0)
       run: ./z configure --sysroot-location=${{ env.RELEASE_SYSROOT_LOCATION }} --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }}-stage0 --stage=0
 
-
     - name: Create release archive (stage 0)
       run: ./z release
 

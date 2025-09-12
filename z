@@ -119,7 +119,10 @@ download_steps() {
         print_error "Failed to download Binutils."
         return 1
     }
-    extract_tar_bz2 "$binutils_tar_bz2_file" "$Z_SYSROOT_LOCATION"
+    extract_tar_bz2 "$binutils_tar_bz2_file" "$Z_SYSROOT_LOCATION" || {
+        print_error "Failed to extract Binutils."
+        return 1
+    }
 
     return 0
 }
