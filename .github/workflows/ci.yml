@@ -32,7 +32,9 @@ concurrency:
 
 env:
   # Directory where GCC will be installed.
-  INSTALL_LOCATION: /tmp/nanvix
+  INSTALL_LOCATION: /opt/nanvix
+  # Directory where the sysroot is located.
+  SYSROOT_LOCATION: /opt/nanvix
 
 #==================================================================================================
 # Jobs
@@ -66,10 +68,10 @@ jobs:
       run: sudo ./z setup
 
     - name: Configure GCC
-      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }}
+      run: ./z configure --sysroot-location=${{ env.SYSROOT_LOCATION }}  --install-location=${{ env.INSTALL_LOCATION }} --stage=0
 
     - name: Build GCC (stage 0)
-      run: ./z build --stage=0
+      run: ./z build
 
     - name: Install GCC
       run: ./z install
