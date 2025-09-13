@@ -61,9 +61,6 @@ jobs:
     - name: Enable Compiler Caching
       uses: mozilla-actions/sccache-action@v0.0.9
 
-    - name: Install dependencies
-      run: sudo ./z setup
-
     - name: Get commit information
       id: commit_info
       run: |
@@ -76,11 +73,8 @@ jobs:
         echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
         echo "gcc_branch=${GCC_BRANCH}" >> $GITHUB_OUTPUT
 
-    - name: Fast-forward ${{ steps.commit_info.outputs.gcc_branch }} branch to dev
-      run: |
-        git fetch origin
-        git checkout -B ${{ steps.commit_info.outputs.gcc_branch }} origin/dev
-        git push origin ${{ steps.commit_info.outputs.gcc_branch }}
+    - name: Install dependencies
+      run: sudo ./z setup
 
     - name: Configure build (stage 0)
       run: ./z configure --install-location=${{ env.RELEASE_INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }}-stage0 --stage=0
@@ -93,6 +87,12 @@ jobs:
 
     - name: Create release archive (stage 1)
       run: ./z release
+
+    - name: Fast-forward ${{ steps.commit_info.outputs.gcc_branch }} branch to dev
+      run: |
+        git fetch origin
+        git checkout -B ${{ steps.commit_info.outputs.gcc_branch }} origin/dev
+        git push origin ${{ steps.commit_info.outputs.gcc_branch }}
 
     - name: Create release tag
       run: |
