@@ -112,11 +112,11 @@ jobs:
         echo "Latest newlib: version=$NEW_VERSION hash=$NEW_HASH"
 
         CHANGED=false
-        if [ "$CUR_BIN_VER" != "$BIN_VERSION" ] || [ "$CUR_BIN_HASH" != "$BIN_HASH" ]; then
+        if [ "$CUR_BIN_HASH" != "$BIN_HASH" ]; then
           echo "Binutils update detected"
           CHANGED=true
         fi
-        if [ "$CUR_NEW_VER" != "$NEW_VERSION" ] || [ "$CUR_NEW_HASH" != "$NEW_HASH" ]; then
+        if [ "$CUR_NEW_HASH" != "$NEW_HASH" ]; then
           echo "Newlib update detected"
           CHANGED=true
         fi
@@ -133,19 +133,16 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git checkout -b "$BRANCH_NAME"
 
-        # Update z script values
-        sed -E -i "s/^(readonly BINUTILS_VERSION=).*/\1\"${BIN_VERSION}\"/" z
+        # Update only short commit hashes and sha256 checksums in z script
+        # Do NOT change VERSION or URL fields.
         sed -E -i "s/^(readonly BINUTILS_SHORT_COMMIT_HASH=).*/\1\"${BIN_HASH}\"/" z
-        sed -E -i "s@^(readonly BINUTILS_URL=).*@\1\"https://github.com/nanvix/binutils/releases/download/nanvix-v${BIN_VERSION}-${BIN_HASH}/nanvix-binutils-${BIN_VERSION}-${BIN_HASH}.tar.bz2\"@" z
         sed -E -i "s@^(readonly BINUTILS_SHA256_CHECKSUM=).*@\1\"${BIN_SHA_FMT}\"@" z
 
-        sed -E -i "s/^(readonly NEWLIB_VERSION=).*/\1\"${NEW_VERSION}\"/" z
         sed -E -i "s/^(readonly NEWLIB_SHORT_COMMIT_HASH=).*/\1\"${NEW_HASH}\"/" z
-        sed -E -i "s@^(readonly NEWLIB_URL=).*@\1\"https://github.com/nanvix/newlib/releases/download/nanvix-v${NEW_VERSION}-${NEW_HASH}/nanvix-newlib-${NEW_VERSION}-${NEW_HASH}.tar.bz2\"@" z
         sed -E -i "s@^(readonly NEWLIB_SHA256_CHECKSUM=).*@\1\"${NEW_SHA_FMT}\"@" z
 
         git add z
-        git commit -m "ci: update z utility with Binutils ${BIN_VERSION}-${BIN_HASH} and Newlib ${NEW_VERSION}-${NEW_HASH}"
+        git commit -m "ci: update z utility short commit hashes and sha256 checksums: binutils ${BIN_HASH}, newlib ${NEW_HASH}"
         git push -u origin "$BRANCH_NAME"
 
         echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
