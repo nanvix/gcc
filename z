@@ -92,14 +92,14 @@ readonly INSTALL_TARGETS_STAGE_1=("install-gcc" "install-target-libgcc" "install
 # Binutils.
 readonly BINUTILS_VERSION="2.40"
 readonly BINUTILS_SHORT_COMMIT_HASH="cce4ffcd98"
-readonly BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.tar.bz2"
+readonly BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v2.40-cce4ffcd98/nanvix-binutils-2.40-cce4ffcd98.tar.bz2"
 readonly BINUTILS_SHA256_CHECKSUM="sha256:904980cde09ff38eb73f3f275c366bad8178e36ae7f88775eba988d41e8407b8"
 
 # NewLib
 readonly NEWLIB_VERSION="4.4.0"
-readonly NEWLIB_SHORT_COMMIT_HASH="387c0dac7"
-readonly NEWLIB_URL="https://github.com/nanvix/newlib/releases/download/nanvix-v${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}/nanvix-newlib-${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}.tar.bz2"
-readonly NEWLIB_SHA256_CHECKSUM="sha256:d0e1d0f133e751e2250ee0bdf8c784374406def07acadcba5bbaf7f9347aa2de"
+readonly NEWLIB_SHORT_COMMIT_HASH="61a6adfb7"
+readonly NEWLIB_URL="https://github.com/nanvix/newlib/releases/download/nanvix-v4.4.0-61a6adfb7/nanvix-newlib-4.4.0-61a6adfb7.tar.bz2"
+readonly NEWLIB_SHA256_CHECKSUM="sha256:a9d63f22c5fd8a43f70a6a96e9ece5ece213b2a2e89dfcb1085902aff9fddafb"
 
 #==================================================================================================
 # Project-Specific Functions
