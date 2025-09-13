@@ -91,9 +91,9 @@ readonly INSTALL_TARGETS_STAGE_1=("install-gcc" "install-target-libgcc" "install
 
 # Binutils.
 readonly BINUTILS_VERSION="2.40"
-readonly BINUTILS_SHORT_COMMIT_HASH="329366cc2e"
+readonly BINUTILS_SHORT_COMMIT_HASH="ff8cd7fb81"
 readonly BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.tar.bz2"
-readonly BINUTILS_SHA256_CHECKSUM="sha256:48e7d2709eef5b0422519ceb3ce529eccda40365331f873d0d15e3142328f9e3"
+readonly BINUTILS_SHA256_CHECKSUM="sha256:19b38c8ad8c1a233343f0bf62d071dd940ce561fdc39a8fc1b8d1d02ff65f826"
 
 # NewLib
 readonly NEWLIB_VERSION="4.4.0"
