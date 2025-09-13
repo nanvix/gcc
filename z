@@ -168,6 +168,11 @@ download_steps() {
 configure_steps() {
     local sysroot_location="${Z_SYSROOT_LOCATION:-${Z_INSTALL_LOCATION}}"
 
+    # Enable compilation caching if possible.
+    enable_compilation_caching || {
+        print_warning "Compilation caching disabled."
+    }
+
     ../configure \
         --target="${Z_TARGET}" \
         --prefix="${Z_INSTALL_LOCATION}" \
@@ -201,6 +206,7 @@ configure_steps() {
 build_steps() {
     local parallel_build_option=$1
 
+    # Collect build targets.
     local build_targets=()
     if [[ "${Z_STAGE}" == "0" ]]; then
         build_targets=("${BUILD_TARGETS_STAGE_0[@]}")
@@ -210,6 +216,11 @@ build_steps() {
         print_error "Invalid stage '$Z_STAGE'."
         return 1
     fi
+
+    # Enable compilation caching if possible.
+    enable_compilation_caching || {
+        print_warning "Compilation caching disabled."
+    }
 
     make -j "${parallel_build_option}" "${build_targets[@]}" || {
         print_error "Build failed for targets: '${build_targets[*]}'."
