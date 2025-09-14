@@ -97,9 +97,9 @@ readonly BINUTILS_SHA256_CHECKSUM="sha256:904980cde09ff38eb73f3f275c366bad8178e3
 
 # NewLib
 readonly NEWLIB_VERSION="4.4.0"
-readonly NEWLIB_SHORT_COMMIT_HASH="387c0dac7"
+readonly NEWLIB_SHORT_COMMIT_HASH="61a6adfb7"
 readonly NEWLIB_URL="https://github.com/nanvix/newlib/releases/download/nanvix-v${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}/nanvix-newlib-${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}.tar.bz2"
-readonly NEWLIB_SHA256_CHECKSUM="sha256:d0e1d0f133e751e2250ee0bdf8c784374406def07acadcba5bbaf7f9347aa2de"
+readonly NEWLIB_SHA256_CHECKSUM="sha256:a9d63f22c5fd8a43f70a6a96e9ece5ece213b2a2e89dfcb1085902aff9fddafb"
 
 #==================================================================================================
 # Project-Specific Functions
