@@ -14,7 +14,7 @@ on:
       - newlib-release
 
 concurrency:
-  group: release-gcc-${{ github.event.action }}
+  group: release-gcc
   cancel-in-progress: false
 
 #==================================================================================================
@@ -24,10 +24,6 @@ concurrency:
 env:
   # Version of GCC.
   GCC_VERSION: "12.4.0"
-  # Version of Binutils (for fetching latest release).
-  BINUTILS_VERSION: "2.40"
-  # Version of NewLib (for fetching latest release).
-  NEWLIB_VERSION: "4.4.0"
   # Directory where GCC will be installed.
   INSTALL_LOCATION: /opt/nanvix
 
@@ -200,7 +196,9 @@ jobs:
 
     - name: Prepare Docker context
       if: steps.check_release.outputs.exists == 'false'
-      run: cp -r ${{ env.INSTALL_LOCATION }} ./docker-install
+      run: |
+        mkdir -p ./docker-install
+        cp -r "${{ env.INSTALL_LOCATION }}/." ./docker-install/
 
     - name: Set up Docker Buildx
       if: steps.check_release.outputs.exists == 'false'
