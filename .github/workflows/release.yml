@@ -158,9 +158,7 @@ jobs:
 
     - name: Configure build
       if: steps.check_release.outputs.exists == 'false'
-      env:
-        Z_SYSROOT_LOCATION: ${{ env.INSTALL_LOCATION }}
-      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }} --stage=${{ steps.stage.outputs.stage }}
+      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }} --sysroot-location=${{ env.INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }} --stage=${{ steps.stage.outputs.stage }}
 
     - name: Build
       if: steps.check_release.outputs.exists == 'false'
