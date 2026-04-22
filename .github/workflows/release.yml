@@ -87,6 +87,7 @@ jobs:
       run: |
         TAG_NAME="${{ steps.commit_info.outputs.tag_name }}"
         if git tag -l "${TAG_NAME}" | grep -q .; then
+          echo "tag_exists=true" >> $GITHUB_OUTPUT
           if gh release view "${TAG_NAME}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Release ${TAG_NAME} already exists, skipping."
@@ -95,6 +96,7 @@ jobs:
             echo "Tag ${TAG_NAME} exists but GitHub Release does not; continuing to recover from partial previous run."
           fi
         else
+          echo "tag_exists=false" >> $GITHUB_OUTPUT
           echo "exists=false" >> $GITHUB_OUTPUT
         fi
 
@@ -114,6 +116,10 @@ jobs:
           "https://api.github.com/repos/nanvix/binutils/releases/tags/${BINUTILS_TAG}")
 
         ASSET_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | test("nanvix-binutils-.*\\.tar\\.bz2$")) | .browser_download_url' | head -n1)
+        if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+          echo "::error::No binutils tarball asset found for tag ${BINUTILS_TAG}"
+          exit 1
+        fi
         echo "Downloading Binutils from: $ASSET_URL"
 
         curl -fsS -L -o /tmp/nanvix-binutils.tar.bz2 "$ASSET_URL"
@@ -133,6 +139,10 @@ jobs:
           "https://api.github.com/repos/nanvix/newlib/releases/tags/${NEWLIB_TAG}")
 
         ASSET_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | test("nanvix-newlib-.*\\.tar\\.bz2$")) | .browser_download_url' | head -n1)
+        if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+          echo "::error::No newlib tarball asset found for tag ${NEWLIB_TAG}"
+          exit 1
+        fi
         echo "Downloading NewLib from: $ASSET_URL"
 
         curl -fsS -L -o /tmp/nanvix-newlib.tar.bz2 "$ASSET_URL"
@@ -263,7 +273,7 @@ jobs:
         git push origin ${{ steps.commit_info.outputs.gcc_branch }}
 
     - name: Create release tag
-      if: steps.check_release.outputs.exists == 'false'
+      if: steps.check_release.outputs.exists == 'false' && steps.check_release.outputs.tag_exists == 'false'
       run: |
         git tag ${{ steps.commit_info.outputs.tag_name }}
         git push origin ${{ steps.commit_info.outputs.tag_name }}
@@ -277,7 +287,7 @@ jobs:
         body: |
           Automated release of Nanvix GCC ${{ env.GCC_VERSION }} (${{ steps.stage.outputs.stage_label }})
 
-          Built from commit: ${{ github.sha }}
+          Built from commit: ${{ steps.commit_info.outputs.short_sha }}
           Triggered by: ${{ github.event.action }}
 
           This release contains the GCC toolchain configured for the Nanvix operating system target (i686-nanvix).
