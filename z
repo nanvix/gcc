@@ -1,0 +1,285 @@
+#!/bin/bash
+
+#
+# Utility for building development tools for Nanvix.
+#
+# Run './z help' for more information on how to use this utility.
+#
+# Relevant Environment Variables
+#
+#   - Z_TARGET: Target architecture.
+#   - Z_STAGE: Build stage.
+#   - Z_INSTALL_LOCATION: Installation directory.
+#   - Z_SYSROOT_LOCATION: Sysroot directory.
+#   - Z_RELEASE_NAME: Release name.
+#
+# shellcheck disable=SC2329
+# shellcheck disable=SC2317
+# shellcheck disable=SC2034
+
+#==================================================================================================
+
+# Fast fail on errors, unset variables, and pipe failures.
+set -euo pipefail
+
+#==================================================================================================
+# Import Utils Script
+#==================================================================================================
+
+UTILS_SCRIPT_VERSION="c24dedaf76a4833b388597805e2c0625cef0c453"
+UTILS_SCRIPT_URL="https://raw.githubusercontent.com/nanvix/scripts/${UTILS_SCRIPT_VERSION}/utils.sh"
+UTILS_SCRIPT_SHA256="c2d0402cc407963d83afd32d9ffe49c19e25f386172e89bf09812393230388bb"
+
+utils_script_dir=$(mktemp -d)
+trap 'rm -rf "$utils_script_dir"' EXIT
+utils_script="${utils_script_dir}/utils-${UTILS_SCRIPT_VERSION}.sh"
+
+# Download only if the file doesn't exist or is empty
+if [[ ! -s "$utils_script" ]]; then
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$UTILS_SCRIPT_URL" -o "$utils_script" || {
+            echo "Failed to download utils.sh"
+            rm -f "$utils_script"
+            exit 1
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$utils_script" "$UTILS_SCRIPT_URL" || {
+            echo "Failed to download utils.sh"
+            rm -f "$utils_script"
+            exit 1
+        }
+    else
+        echo "curl or wget required"
+        exit 1
+    fi
+
+    # Verify integrity before sourcing
+    echo "${UTILS_SCRIPT_SHA256}  ${utils_script}" | sha256sum -c --quiet || {
+        echo "Checksum verification failed for utils.sh"
+        rm -f "$utils_script"
+        exit 1
+    }
+fi
+
+# Source the downloaded script
+# shellcheck disable=SC1090
+source "${utils_script}"
+
+#==================================================================================================
+# Z Constants
+#==================================================================================================
+
+# Project name.
+readonly Z_PROJECT_NAME="GCC"
+# Directory used when building, empty if not required.
+readonly Z_PROJECT_BUILD_DIR="build"
+
+# Required Build Tools (tool_name => minimum_version)
+readonly -A Z_PROJECT_REQUIRED_TOOLS=(
+    ["gcc"]="13.3.0"
+    ["make"]="4.3.0"
+    ["bzip2"]="1.0.8"
+    ["tar"]="1.34.0"
+    ["wget"]="1.21.4"
+)
+
+# Required System Packages for Setup
+readonly Z_PROJECT_REQUIRED_PACKAGES=("build-essential" "wget" "bzip2" "tar")
+
+#==================================================================================================
+# Project-Specific Constants
+#==================================================================================================
+
+# Build Targets
+readonly BUILD_TARGETS_STAGE_0=("all-gcc" "all-target-libgcc")
+readonly BUILD_TARGETS_STAGE_1=("all-gcc" "all-target-libgcc" "all-target-libstdc++-v3")
+
+# Install Targets
+readonly INSTALL_TARGETS_STAGE_0=("install-gcc" "install-target-libgcc")
+readonly INSTALL_TARGETS_STAGE_1=("install-gcc" "install-target-libgcc" "install-target-libstdc++-v3")
+
+# Binutils.
+readonly BINUTILS_VERSION="2.40"
+readonly BINUTILS_SHORT_COMMIT_HASH="cce4ffcd98"
+readonly BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_SHORT_COMMIT_HASH}.tar.bz2"
+readonly BINUTILS_SHA256_CHECKSUM="sha256:904980cde09ff38eb73f3f275c366bad8178e36ae7f88775eba988d41e8407b8"
+
+# NewLib
+readonly NEWLIB_VERSION="4.4.0"
+readonly NEWLIB_SHORT_COMMIT_HASH="e12d84a67"
+readonly NEWLIB_URL="https://github.com/nanvix/newlib/releases/download/nanvix-v${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}/nanvix-newlib-${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}.tar.bz2"
+readonly NEWLIB_SHA256_CHECKSUM="sha256:94e7771fd4e9cc495dac846d468d4214617a510cda1e8c964e4a19bf2a1c2694"
+
+#==================================================================================================
+# Project-Specific Functions
+#==================================================================================================
+
+#
+# Description
+#
+#   Executes project-specific steps for downloading dependencies.
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+download_steps() {
+
+    # Download pre-requisites.
+    ./contrib/download_prerequisites
+
+    # Download and extract Binutils if sysroot location is not set.
+    if [[ -z "${Z_SYSROOT_LOCATION:-}" ]]; then
+        local sysroot_location="${Z_INSTALL_LOCATION}"
+
+        local binutils_tar_bz2_file
+        binutils_tar_bz2_file=$(download "$BINUTILS_URL" "$BINUTILS_SHA256_CHECKSUM") || {
+            print_error "Failed to download Binutils."
+            return 1
+        }
+        extract_tar_bz2 "$binutils_tar_bz2_file" "$sysroot_location" || {
+            print_error "Failed to extract Binutils."
+            return 1
+        }
+
+        # Download and extract NewLib if configuring stage 1.
+        if [[ "${Z_STAGE}" == "1" ]]; then
+            local newlib_tar_bz2_file
+            newlib_tar_bz2_file=$(download "$NEWLIB_URL" "$NEWLIB_SHA256_CHECKSUM") || {
+                print_error "Failed to download NewLib."
+                return 1
+            }
+            extract_tar_bz2 "$newlib_tar_bz2_file" "${sysroot_location}" || {
+                print_error "Failed to extract NewLib."
+                return 1
+            }
+        fi
+    fi
+
+    return 0
+}
+
+#
+# Description
+#
+#   Executes project-specific steps for configuring a build.
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+# Usage Example
+#
+#   configure_steps "i686-nanvix" "/usr/local"
+#
+configure_steps() {
+    local sysroot_location="${Z_SYSROOT_LOCATION:-${Z_INSTALL_LOCATION}}"
+
+    # Enable compilation caching if possible.
+    enable_compilation_caching || {
+        print_warning "Compilation caching disabled."
+    }
+
+    ../configure \
+        --target="${Z_TARGET}" \
+        --prefix="${Z_INSTALL_LOCATION}" \
+        --with-sysroot="${sysroot_location}" \
+        --disable-multilib \
+        --disable-nls \
+        --enable-languages=c,c++,fortran  \
+        --disable-libquadmath \
+        --disable-libquadmath-support \
+        --with-newlib || {
+        print_error "Configuration failed."
+        return 1
+    }
+
+    return 0
+}
+
+#
+# Description
+#
+#   Project-specific steps for building the project.
+#
+# Parameters
+#
+#   - $1: Number of parallel build jobs.
+#
+# Usage Example
+#
+#   build_steps 4 "all" "check"
+#
+build_steps() {
+    local parallel_build_option=$1
+
+    # Collect build targets.
+    local build_targets=()
+    if [[ "${Z_STAGE}" == "0" ]]; then
+        build_targets=("${BUILD_TARGETS_STAGE_0[@]}")
+    elif [[ "${Z_STAGE}" == "1" ]]; then
+        build_targets=("${BUILD_TARGETS_STAGE_1[@]}")
+    else
+        print_error "Invalid stage '$Z_STAGE'."
+        return 1
+    fi
+
+    # Enable compilation caching if possible.
+    enable_compilation_caching || {
+        print_warning "Compilation caching disabled."
+    }
+
+    make -j "${parallel_build_option}" "${build_targets[@]}" || {
+        print_error "Build failed for targets: '${build_targets[*]}'."
+        return 1
+    }
+
+    return 0
+}
+
+#
+# Description
+#
+#   Project-specific steps for installing the project.
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+# Usage Example
+#
+#   install_steps "install" "/usr/local"
+#
+install_steps() {
+    local install_targets=()
+    if [[ "${Z_STAGE}" == "0" ]]; then
+        install_targets=("${INSTALL_TARGETS_STAGE_0[@]}")
+    elif [[ "${Z_STAGE}" == "1" ]]; then
+        install_targets=("${INSTALL_TARGETS_STAGE_1[@]}")
+    else
+        print_error "Invalid stage '$Z_STAGE'. Use '0' or '1'."
+        return 1
+    fi
+
+    make "${install_targets[@]}" || {
+        print_error "Installation failed."
+        return 1
+    }
+
+    return 0
+}
+
+#==================================================================================================
+# Main Script
+#==================================================================================================
+
+# Run main function with all arguments
+zmain "$@" || {
+    exit 1
+}
+
+exit 0
