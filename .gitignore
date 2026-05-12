@@ -69,3 +69,9 @@ stamp-*
 /mpc*
 /gmp*
 /isl*
+
+# Build artifacts.
+/build/
+
+.z.config
+nanvix-gcc.tar.bz2

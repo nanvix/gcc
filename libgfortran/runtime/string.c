@@ -106,6 +106,7 @@ strnlen (const char *s, size_t maxlen)
 #endif
 
 
+#if 0
 #ifndef HAVE_STRNDUP
 static char *
 strndup (const char *s, size_t n)
@@ -118,6 +119,7 @@ strndup (const char *s, size_t n)
   p[len] = '\0';
   return p;
 }
+#endif
 #endif
 
 

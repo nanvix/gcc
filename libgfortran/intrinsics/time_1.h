@@ -83,6 +83,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
    threadsafe.  */
 
 #ifndef HAVE_LOCALTIME_R
+#if 0
 /* If _POSIX is defined localtime_r gets defined by mingw-w64 headers.  */
 #ifdef localtime_r
 #undef localtime_r
@@ -94,6 +95,7 @@ localtime_r (const time_t * timep, struct tm * result)
   *result = *localtime (timep);
   return result;
 }
+#endif
 #endif
 
 
