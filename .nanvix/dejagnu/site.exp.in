@@ -1,0 +1,11 @@
+# DejaGnu site configuration for Nanvix GCC testing.
+#
+# This file is sourced by DejaGnu via the DEJAGNU environment variable.
+# It sets up the board search path so that the nanvix-sim board file is found.
+#
+# Usage:
+#   export DEJAGNU=/path/to/this/site.exp
+#   make check-gcc RUNTESTFLAGS="--target_board=nanvix-sim compile.exp"
+
+# Add the Nanvix board directory to the search path.
+lappend boards_dir "@NANVIX_BOARDS_DIR@"
