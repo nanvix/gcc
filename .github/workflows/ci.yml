@@ -33,6 +33,8 @@ concurrency:
 env:
   # Directory where GCC will be installed.
   INSTALL_LOCATION: /opt/nanvix
+  # Required for gh CLI to download Nanvix releases.
+  GH_TOKEN: ${{ github.token }}
 
 #==================================================================================================
 # Jobs
@@ -73,5 +75,19 @@ jobs:
     - name: Build GCC (stage 1)
       run: ./z build
 
-    - name: Install GCC
+    - name: Install GCC (stage 1)
       run: ./z install
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+        ls -l /dev/kvm
+
+    - name: Verify GCC installation
+      run: ./z verify
+
+    - name: "Smoke test: compile and link C"
+      run: ./z test

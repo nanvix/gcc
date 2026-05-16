@@ -85,7 +85,7 @@ readonly -A Z_PROJECT_REQUIRED_TOOLS=(
 )
 
 # Required System Packages for Setup
-readonly Z_PROJECT_REQUIRED_PACKAGES=("build-essential" "wget" "bzip2" "tar")
+readonly Z_PROJECT_REQUIRED_PACKAGES=("build-essential" "wget" "bzip2" "tar" "gh")
 
 #==================================================================================================
 # Project-Specific Constants
@@ -110,6 +110,11 @@ readonly NEWLIB_VERSION="4.4.0"
 readonly NEWLIB_SHORT_COMMIT_HASH="e12d84a67"
 readonly NEWLIB_URL="https://github.com/nanvix/newlib/releases/download/nanvix-v${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}/nanvix-newlib-${NEWLIB_VERSION}-${NEWLIB_SHORT_COMMIT_HASH}.tar.bz2"
 readonly NEWLIB_SHA256_CHECKSUM="sha256:94e7771fd4e9cc495dac846d468d4214617a510cda1e8c964e4a19bf2a1c2694"
+
+# Nanvix OS release (used to obtain libposix.a, user.ld, and nanvixd binaries)
+readonly NANVIX_RELEASE_TAG="v0.13.17"
+readonly NANVIX_RELEASE_PATTERN="nanvix-x86-microvm-multi-process-release-128mb-*.tar.bz2"
+readonly NANVIX_RELEASE_SHA256="eeb9686fca184944cdc6f8701796d0988df3f80d9e4dd84d3040238452fd8687"
 
 #==================================================================================================
 # Project-Specific Functions
@@ -156,6 +161,62 @@ download_steps() {
                 return 1
             }
         fi
+    fi
+
+    # Download Nanvix release if any required artifact is missing.
+    local install_location="${Z_INSTALL_LOCATION}"
+    if [[ ! -f "${install_location}/lib/libposix.a" ]] || \
+       [[ ! -f "${install_location}/lib/user.ld" ]] || \
+       [[ ! -f "${install_location}/libexec/nanvixd/nanvixd.elf" ]] || \
+       [[ ! -f "${install_location}/libexec/nanvixd/kernel.elf" ]] || \
+       [[ ! -f "${install_location}/libexec/nanvixd/linuxd.elf" ]] || \
+       [[ ! -f "${install_location}/libexec/nanvixd/uservm.elf" ]]; then
+        echo "Downloading Nanvix release ${NANVIX_RELEASE_TAG}..."
+        local nanvix_dir
+        nanvix_dir="$(mktemp -d)"
+        # Ensure cleanup on any failure path.
+        # shellcheck disable=SC2064
+        trap "rm -rf \"$nanvix_dir\"" RETURN
+        local -a gh_args=("--repo" "nanvix/nanvix" "--pattern" "${NANVIX_RELEASE_PATTERN}" "--dir" "$nanvix_dir")
+        if [[ "${NANVIX_RELEASE_TAG}" != "latest" ]]; then
+            gh_args=("${NANVIX_RELEASE_TAG}" "${gh_args[@]}")
+        fi
+        gh release download "${gh_args[@]}" || {
+            echo "ERROR: Failed to download Nanvix release. Ensure 'gh' is installed and authenticated."
+            return 1
+        }
+        local archive
+        archive=$(find "$nanvix_dir" -maxdepth 1 -name "${NANVIX_RELEASE_PATTERN}")
+        if [[ -z "$archive" ]]; then
+            echo "ERROR: No matching archive found in download directory."
+            return 1
+        fi
+        if [[ $(echo "$archive" | wc -l) -ne 1 ]]; then
+            echo "ERROR: Multiple matching archives found; expected exactly one."
+            return 1
+        fi
+        # Verify archive integrity.
+        echo "${NANVIX_RELEASE_SHA256}  ${archive}" | sha256sum -c --quiet || {
+            echo "ERROR: Checksum verification failed for Nanvix release archive."
+            return 1
+        }
+        extract_tar_bz2 "$archive" "$nanvix_dir" || {
+            echo "ERROR: Failed to extract Nanvix release archive."
+            return 1
+        }
+        mkdir -p "${install_location}/lib"
+        install -m 644 "$nanvix_dir/lib/libposix.a" "${install_location}/lib/"
+        install -m 644 "$nanvix_dir/lib/user.ld" "${install_location}/lib/"
+        # Install nanvixd binaries for integration tests.
+        mkdir -p "${install_location}/libexec/nanvixd"
+        install -m 755 "$nanvix_dir/bin/nanvixd.elf" "${install_location}/libexec/nanvixd/"
+        install -m 755 "$nanvix_dir/bin/kernel.elf" "${install_location}/libexec/nanvixd/"
+        install -m 755 "$nanvix_dir/bin/linuxd.elf" "${install_location}/libexec/nanvixd/"
+        install -m 755 "$nanvix_dir/bin/uservm.elf" "${install_location}/libexec/nanvixd/"
+        trap - RETURN
+        rm -rf "$nanvix_dir"
+    else
+        echo "Nanvix OS libraries already present in '${install_location}/lib/'."
     fi
 
     return 0
@@ -273,9 +334,279 @@ install_steps() {
     return 0
 }
 
+#
+# Description
+#
+#   Smoke test: compiles a hello.c program using the Nanvix cross compiler.
+#
+# Return Value
+#
+#   - On success, prints the path to the compiled binary and returns zero.
+#   - On failure, this function returns non-zero.
+#
+test_smoke_c() {
+    local install_location="${Z_INSTALL_LOCATION:-/opt/nanvix}"
+    local cc="${install_location}/bin/${Z_TARGET}-gcc"
+    local linker_script="${install_location}/lib/user.ld"
+    local libposix="${install_location}/lib/libposix.a"
+
+    if [[ ! -x "${cc}" ]]; then
+        echo "ERROR: Cross compiler not found at '${cc}'. Run install first." >&2
+        return 1
+    fi
+    if [[ ! -f "${linker_script}" ]]; then
+        echo "ERROR: Linker script not found at '${linker_script}'. Run download first." >&2
+        return 1
+    fi
+    if [[ ! -f "${libposix}" ]]; then
+        echo "ERROR: libposix.a not found at '${libposix}'. Run download first." >&2
+        return 1
+    fi
+
+    local test_dir
+    test_dir="$(mktemp -d)"
+
+    cp "${PROJECT_DIR}/.nanvix/tests/hello.c" "${test_dir}/hello.c"
+
+    echo "Compiling hello.c with ${Z_TARGET}-gcc..." >&2
+    "${cc}" \
+        -T "${linker_script}" \
+        -o "${test_dir}/hello.elf" \
+        "${test_dir}/hello.c" \
+        -Wl,--start-group "${libposix}" -lc -Wl,--end-group || {
+        echo "ERROR: Failed to compile hello.c." >&2
+        rm -rf "${test_dir}"
+        return 1
+    }
+
+    echo "Smoke test passed: ${test_dir}/hello.elf" >&2
+    # Emit only the binary path on stdout.
+    echo "${test_dir}/hello.elf"
+    return 0
+}
+
+#
+# Description
+#
+#   Integration test: runs a compiled binary on nanvixd.elf.
+#
+# Parameters
+#
+#   - $1: Path to the smoke test binary.
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+test_integration_c() {
+    local smoke_test_bin="$1"
+    local install_location="${Z_INSTALL_LOCATION:-/opt/nanvix}"
+
+    if [[ ! -f "${smoke_test_bin}" ]]; then
+        echo "ERROR: Smoke test binary not found at '${smoke_test_bin}'."
+        return 1
+    fi
+
+    local nanvixd="${install_location}/libexec/nanvixd/nanvixd.elf"
+    if [[ ! -f "${nanvixd}" ]]; then
+        echo "ERROR: nanvixd.elf not found at '${nanvixd}'. Run download first."
+        return 1
+    fi
+
+    if ! command -v timeout >/dev/null 2>&1; then
+        echo "Skipping integration test: 'timeout' utility not available."
+        return 0
+    fi
+
+    echo "Running integration test: hello.c on nanvixd.elf..."
+    local timeout_seconds=30
+    local output
+    output="$(timeout "${timeout_seconds}" \
+        "${nanvixd}" \
+            -bin-dir "${install_location}/libexec/nanvixd" \
+            -console-file /dev/stdout \
+            -- "${smoke_test_bin}" </dev/null 2>&1)" || {
+        local rc=$?
+        if [[ $rc -eq 124 ]]; then
+            echo "ERROR: Integration test timed out after ${timeout_seconds}s."
+        else
+            echo "ERROR: Integration test failed (exit code $rc)."
+        fi
+        echo "Output:"
+        echo "$output"
+        return 1
+    }
+
+    echo "$output"
+
+    # Verify expected output from the hello-world program.
+    if echo "$output" | grep -q "value = 42"; then
+        echo "Integration test passed: program ran successfully on nanvixd.elf."
+    else
+        echo "ERROR: Expected output 'value = 42' not found."
+        return 1
+    fi
+
+    return 0
+}
+
+#
+# Description
+#
+#   Project-specific steps for running tests.
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+test_steps() {
+    local smoke_bin
+
+    # Run smoke test: compile hello.c
+    smoke_bin="$(test_smoke_c)" || {
+        print_error "Smoke test failed."
+        return 1
+    }
+
+    # Run integration test: execute on nanvixd.elf (requires KVM)
+    if [[ -w /dev/kvm ]]; then
+        test_integration_c "${smoke_bin}" || {
+            print_error "Integration test failed."
+            return 1
+        }
+    else
+        echo "Skipping integration test: /dev/kvm not available."
+    fi
+
+    return 0
+}
+
+#
+# Description
+#
+#   Verifies that all expected toolchain artifacts are present after installation.
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+verify_steps() {
+    local install_location="${Z_INSTALL_LOCATION}"
+    local target="${Z_TARGET}"
+    local missing=0
+
+    # Expected compiler binaries.
+    local -a expected_binaries=(
+        "bin/${target}-gcc"
+        "bin/${target}-g++"
+        "bin/${target}-gfortran"
+        "bin/${target}-cpp"
+        "bin/${target}-gcov"
+    )
+
+    # Expected libraries.
+    local -a expected_libs=(
+        "lib/gcc/${target}"
+    )
+
+    # Stage 1 adds libstdc++.
+    if [[ "${Z_STAGE}" == "1" ]]; then
+        expected_libs+=("${target}/lib/libstdc++.a")
+    fi
+
+    # Nanvix OS artifacts (from download step).
+    local -a expected_nanvix=(
+        "lib/libposix.a"
+        "lib/user.ld"
+        "libexec/nanvixd/nanvixd.elf"
+        "libexec/nanvixd/kernel.elf"
+        "libexec/nanvixd/linuxd.elf"
+        "libexec/nanvixd/uservm.elf"
+    )
+
+    echo "Verifying toolchain artifacts in '${install_location}'..."
+
+    # Check binaries.
+    for bin in "${expected_binaries[@]}"; do
+        if [[ ! -x "${install_location}/${bin}" ]]; then
+            echo "  MISSING: ${bin}"
+            missing=$((missing + 1))
+        else
+            echo "  OK: ${bin}"
+        fi
+    done
+
+    # Check libraries (directories and files).
+    for lib in "${expected_libs[@]}"; do
+        if [[ ! -e "${install_location}/${lib}" ]]; then
+            echo "  MISSING: ${lib}"
+            missing=$((missing + 1))
+        else
+            echo "  OK: ${lib}"
+        fi
+    done
+
+    # Check Nanvix OS artifacts.
+    for artifact in "${expected_nanvix[@]}"; do
+        if [[ ! -f "${install_location}/${artifact}" ]]; then
+            echo "  MISSING: ${artifact}"
+            missing=$((missing + 1))
+        else
+            echo "  OK: ${artifact}"
+        fi
+    done
+
+    if [[ $missing -gt 0 ]]; then
+        echo "Verification failed: ${missing} artifact(s) missing."
+        return 1
+    fi
+
+    echo "All expected toolchain artifacts are present."
+    return 0
+}
+
 #==================================================================================================
 # Main Script
 #==================================================================================================
+
+# Handle the 'test' command before dispatching to zmain.
+if [[ "${1:-}" == "test" ]]; then
+    shift
+
+    # Source utils for helper functions but skip zmain dispatch.
+    # Load saved configuration if available.
+    _load_project_config || {
+        print_error "Failed to load build configuration. Run './z configure' first."
+        exit 1
+    }
+
+    test_steps || {
+        print_error "Tests failed."
+        exit 1
+    }
+    print_success "All tests passed."
+    exit 0
+fi
+
+# Handle the 'verify' command before dispatching to zmain.
+if [[ "${1:-}" == "verify" ]]; then
+    shift
+
+    _load_project_config || {
+        print_error "Failed to load build configuration. Run './z configure' first."
+        exit 1
+    }
+
+    verify_steps || {
+        print_error "Verification failed."
+        exit 1
+    }
+    print_success "Verification passed."
+    exit 0
+fi
 
 # Run main function with all arguments
 zmain "$@" || {
