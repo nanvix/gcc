@@ -480,6 +480,16 @@ test_steps() {
         echo "Skipping integration test: /dev/kvm not available."
     fi
 
+    # Run GCC compile-only torture tests to validate code generation (opt-in).
+    if [[ "${Z_RUN_TORTURE:-0}" == "1" ]]; then
+        check_steps "compile" || {
+            print_error "GCC testsuite failed."
+            return 1
+        }
+    else
+        echo "Skipping GCC torture tests (set Z_RUN_TORTURE=1 to enable)."
+    fi
+
     return 0
 }
 
@@ -565,6 +575,119 @@ verify_steps() {
     fi
 
     echo "All expected toolchain artifacts are present."
+    return 0
+}
+
+#
+# Description
+#
+#   Runs GCC's built-in testsuite (compile-only torture tests) against the
+#   Nanvix cross-compiler to validate code generation.
+#
+# Parameters
+#
+#   - $1 (optional): Test suite to run. One of:
+#       "compile"   - compile-only torture tests (default)
+#       "execute"   - execution tests via nanvixd (requires /dev/kvm)
+#       "all"       - both compile and execute
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+check_steps() {
+    local suite="${1:-compile}"
+    local build_dir="${PROJECT_DIR}/${Z_PROJECT_BUILD_DIR}"
+    local dejagnu_dir="${PROJECT_DIR}/.nanvix/dejagnu"
+    local install_location="${Z_INSTALL_LOCATION}"
+
+    # Verify build directory exists.
+    if [[ ! -d "${build_dir}/gcc" ]]; then
+        print_error "Build directory not found. Run './z build' first."
+        return 1
+    fi
+
+    # Generate site.exp from template.
+    local site_exp="${build_dir}/nanvix-site.exp"
+    sed "s|@NANVIX_BOARDS_DIR@|${dejagnu_dir}/baseboards|g" \
+        "${dejagnu_dir}/site.exp.in" > "${site_exp}"
+
+    # Install the simulator wrapper if the target directory is writable.
+    local sim_run="${install_location}/libexec/nanvixd/nanvix-sim-run"
+    if [[ -d "${install_location}/libexec/nanvixd" ]]; then
+        if [[ -w "${install_location}/libexec/nanvixd" ]]; then
+            install -m 755 "${dejagnu_dir}/nanvix-sim-run" "${sim_run}"
+        else
+            print_warning "Cannot install sim wrapper to '${install_location}/libexec/nanvixd/' (permission denied). Using source copy."
+            sim_run="${dejagnu_dir}/nanvix-sim-run"
+        fi
+    fi
+
+    local runtestflags="--target_board=nanvix-sim"
+    local -a make_targets=()
+
+    case "${suite}" in
+        compile)
+            echo "Running GCC compile-only torture tests..."
+            runtestflags="${runtestflags} compile.exp"
+            make_targets=("check-gcc")
+            ;;
+        execute)
+            if [[ ! -w /dev/kvm ]]; then
+                print_error "/dev/kvm not available; execution tests require KVM."
+                return 1
+            fi
+            echo "Running GCC execution tests via nanvixd..."
+            runtestflags="${runtestflags} execute.exp"
+            make_targets=("check-gcc")
+            ;;
+        all)
+            echo "Running GCC full testsuite (compile + execute)..."
+            make_targets=("check-gcc")
+            if [[ ! -w /dev/kvm ]]; then
+                print_error "/dev/kvm not available; execute suite cannot run."
+                return 1
+            fi
+            ;;
+        *)
+            print_error "Unknown test suite '${suite}'. Use: compile, execute, or all."
+            return 1
+            ;;
+    esac
+
+    # Run from the build directory with scoped environment variables.
+    pushd "${build_dir}" > /dev/null
+    DEJAGNU="${site_exp}" NANVIX_INSTALL_DIR="${install_location}" NANVIX_SIM_RUN="${sim_run}" \
+        make "${make_targets[@]}" RUNTESTFLAGS="${runtestflags}" || {
+        print_error "GCC testsuite failed."
+        popd > /dev/null
+        return 1
+    }
+    popd > /dev/null
+
+    # Print summary from the .sum file if available.
+    # Note: make check-gcc returns 0 even on test failures; we must parse
+    # the summary file for unexpected failures to detect regressions.
+    local sum_file="${build_dir}/gcc/testsuite/gcc/gcc.sum"
+    if [[ -f "${sum_file}" ]]; then
+        echo ""
+        echo "=== Test Summary ==="
+        grep -E "^# of (expected|unexpected)" "${sum_file}" || true
+
+        # Fail if there are unexpected failures or errors.
+        local unexpected
+        unexpected=$(grep -c "^# of unexpected failures" "${sum_file}" 2>/dev/null || echo "0")
+        if [[ "$unexpected" -gt 0 ]]; then
+            local fail_count
+            fail_count=$(grep "^# of unexpected failures" "${sum_file}" | awk '{print $NF}')
+            if [[ "${fail_count:-0}" -gt 0 ]]; then
+                print_error "GCC testsuite reported ${fail_count} unexpected failure(s)."
+                return 1
+            fi
+        fi
+    fi
+
     return 0
 }
 

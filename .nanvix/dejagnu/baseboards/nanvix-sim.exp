@@ -1,0 +1,65 @@
+# DejaGnu board file for Nanvix targets (i686-nanvix, x86_64-nanvix).
+#
+# This board enables running GCC's testsuite against the Nanvix cross-compiler.
+# - Compile-only tests work without a simulator.
+# - Execution tests use nanvixd.elf via the nanvix-sim-run wrapper script.
+#
+# Usage:
+#   make check-gcc RUNTESTFLAGS="--target_board=nanvix-sim"
+#
+# Environment variables:
+#   NANVIX_INSTALL_DIR - Path to the Nanvix toolchain install directory
+#                        (default: /opt/nanvix)
+
+load_generic_config "sim"
+load_base_board_description "basic-sim"
+
+process_multilib_options ""
+
+# Compiler is found automatically when testing GCC in-tree.
+set_board_info compiler "[find_gcc]"
+
+# Resolve install directory from environment or use default.
+if {[info exists ::env(NANVIX_INSTALL_DIR)]} {
+    set nanvix_install $::env(NANVIX_INSTALL_DIR)
+} else {
+    set nanvix_install "/opt/nanvix"
+}
+
+# Use newlib include/link flags from the build tree if available.
+set_board_info cflags "[libgloss_include_flags] [newlib_include_flags]"
+
+# Link flags for execution tests. Compile-only tests (dg-do compile) never link,
+# so these only apply to dg-do run/link tests.
+# Note: This board is configured for a single target at a time (i686-nanvix OR
+# x86_64-nanvix). The toolchain is built per-target, so the sysroot artifacts in
+# ${nanvix_install}/lib/ match the configured target. Multilib is disabled
+# (--disable-multilib in the GCC configure step).
+set_board_info ldflags "[libgloss_link_flags] [newlib_link_flags] -T ${nanvix_install}/lib/user.ld -Wl,--start-group ${nanvix_install}/lib/libposix.a -lc -Wl,--end-group"
+
+# Simulator configuration: use the nanvix-sim-run wrapper.
+# The wrapper script must be on PATH or specified as an absolute path.
+if {[info exists ::env(NANVIX_SIM_RUN)]} {
+    set_board_info sim $::env(NANVIX_SIM_RUN)
+} else {
+    set_board_info sim "${nanvix_install}/libexec/nanvixd/nanvix-sim-run"
+}
+
+# Time limit for program execution (seconds).
+set_board_info sim_time_limit 60
+
+# Target capabilities and limitations.
+set_board_info is_simulator 1
+set_board_info slow_simulator 1
+# No command-line argument support.
+set_board_info noargs 1
+# No signal support.
+set_board_info gcc,nosignals 1
+set_board_info gcc,signal_suppress 1
+# No file I/O support beyond stdout.
+set_board_info gcc,no_abs 1
+# Compilation timeout (seconds).
+set_board_info gcc,timeout 300
+# The simulator does not return exit status via the process exit code;
+# DejaGnu must link a status wrapper that prints exit status to stdout.
+set_board_info needs_status_wrapper 1

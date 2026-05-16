@@ -1,0 +1,65 @@
+#!/bin/bash
+#
+# nanvix-sim-run — DejaGnu simulator wrapper for Nanvix.
+#
+# This script adapts nanvixd.elf to the interface DejaGnu expects:
+#   nanvix-sim-run <binary>
+#
+# It runs the given ELF binary on nanvixd and passes through stdout/stderr.
+# Exit code: 0 if nanvixd ran the program successfully, non-zero otherwise.
+#
+# Environment variables:
+#   NANVIX_INSTALL_DIR  - Path to the Nanvix toolchain install (default: /opt/nanvix)
+#   NANVIX_SIM_TIMEOUT  - Timeout in seconds (default: 30)
+#   NANVIX_SIM_LOG_DIR  - Directory for nanvixd diagnostic logs (default: /tmp)
+
+set -euo pipefail
+
+NANVIX_INSTALL_DIR="${NANVIX_INSTALL_DIR:-/opt/nanvix}"
+NANVIX_SIM_TIMEOUT="${NANVIX_SIM_TIMEOUT:-30}"
+NANVIX_SIM_LOG_DIR="${NANVIX_SIM_LOG_DIR:-/tmp}"
+
+nanvixd="${NANVIX_INSTALL_DIR}/libexec/nanvixd/nanvixd.elf"
+bin_dir="${NANVIX_INSTALL_DIR}/libexec/nanvixd"
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: nanvix-sim-run <binary>" >&2
+    exit 1
+fi
+
+binary="$1"
+shift
+
+if [[ ! -f "${binary}" ]]; then
+    echo "ERROR: Binary not found: ${binary}" >&2
+    exit 1
+fi
+
+if [[ ! -x "${nanvixd}" ]]; then
+    echo "ERROR: nanvixd.elf not found at '${nanvixd}'." >&2
+    exit 1
+fi
+
+if ! command -v timeout >/dev/null 2>&1; then
+    echo "ERROR: 'timeout' utility not available." >&2
+    exit 1
+fi
+
+# Log nanvixd diagnostics to a separate file rather than discarding them;
+# the test program's stderr is passed through so DejaGnu can inspect it.
+nanvixd_log="${NANVIX_SIM_LOG_DIR}/nanvix-sim-run.$$.log"
+
+# Run the binary on nanvixd with a kill signal fallback.
+# Use --foreground so nanvixd receives signals properly in a pipeline.
+timeout --foreground -k 5 "${NANVIX_SIM_TIMEOUT}" \
+    "${nanvixd}" \
+        -bin-dir "${bin_dir}" \
+        -console-file /dev/stdout \
+        -- "${binary}" </dev/null 2>"${nanvixd_log}"
+rc=$?
+
+if [[ $rc -eq 124 ]]; then
+    echo "NANVIX-SIM-TIMEOUT: Program exceeded ${NANVIX_SIM_TIMEOUT}s time limit." >&2
+fi
+
+exit $rc
