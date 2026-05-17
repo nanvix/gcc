@@ -1,21 +1,30 @@
 # Copyright(c) The Maintainers of Nanvix.
 # Licensed under the MIT License.
 
-name: Release Pipeline
+name: Nanvix CI
 
 #==================================================================================================
 # Trigger Conditions
 #==================================================================================================
 
 on:
+  pull_request:
+    types:
+      - 'opened'
+      - 'synchronize'
+      - 'reopened'
+      - 'ready_for_review'
+    branches:
+      - 'dev'
+
+  push:
+    branches:
+      - 'dev'
+
   repository_dispatch:
     types:
       - binutils-release
       - newlib-release
-
-concurrency:
-  group: release-gcc
-  cancel-in-progress: false
 
 #==================================================================================================
 # Environment Variables
@@ -26,14 +35,85 @@ env:
   GCC_VERSION: "13.3.0"
   # Directory where GCC will be installed.
   INSTALL_LOCATION: /opt/nanvix
+  # Required for gh CLI to download Nanvix releases.
+  GH_TOKEN: ${{ github.token }}
 
 #==================================================================================================
 # Jobs
 #==================================================================================================
 
 jobs:
-  release:
+
+  #================================================================================================
+  # CI Build
+  #================================================================================================
+
+  build:
+    if: github.event_name != 'repository_dispatch' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
+
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Restore sccache cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/sccache
+        key: ${{ runner.os }}-sccache
+        restore-keys: |
+          ${{ runner.os }}-sccache
+
+    - name: Enable compiler caching
+      uses: mozilla-actions/sccache-action@v0.0.9
+
+    - name: Install dependencies
+      run: sudo ./z setup
+
+    - name: Configure GCC (stage 0)
+      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }} --stage=0
+
+    - name: Build GCC (stage 0)
+      run: ./z build
+
+    - name: Configure GCC (stage 1)
+      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }} --stage=1
+
+    - name: Build GCC (stage 1)
+      run: ./z build
+
+    - name: Install GCC (stage 1)
+      run: ./z install
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+        ls -l /dev/kvm
+
+    - name: Verify GCC installation
+      run: ./z verify
+
+    - name: "Smoke test: compile and link C"
+      run: ./z test
+
+  #================================================================================================
+  # Release
+  #================================================================================================
+
+  release:
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-24.04
+
+    concurrency:
+      group: release-gcc
+      cancel-in-progress: false
 
     permissions:
       contents: write
