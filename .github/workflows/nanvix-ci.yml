@@ -104,20 +104,20 @@ jobs:
       run: ./z test
 
   #================================================================================================
-  # Release
+  # Update Dependencies (triggered by release dispatches)
   #================================================================================================
 
-  release:
+  update-deps:
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-24.04
 
     concurrency:
-      group: release-gcc
+      group: update-deps-${{ github.event.action }}
       cancel-in-progress: false
 
     permissions:
       contents: write
-      packages: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -138,267 +138,187 @@ jobs:
         if [ "$EVENT_TYPE" = "binutils-release" ]; then
           echo "stage=0" >> $GITHUB_OUTPUT
           echo "stage_label=stage0" >> $GITHUB_OUTPUT
-          echo "dispatch_target=nanvix/newlib" >> $GITHUB_OUTPUT
-          echo "dispatch_event=gcc-stage0-release" >> $GITHUB_OUTPUT
         elif [ "$EVENT_TYPE" = "newlib-release" ]; then
           echo "stage=1" >> $GITHUB_OUTPUT
           echo "stage_label=stage1" >> $GITHUB_OUTPUT
-          echo "dispatch_target=nanvix/toolchain-gcc" >> $GITHUB_OUTPUT
-          echo "dispatch_event=gcc-stage1-release" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Get commit information
-      id: commit_info
-      run: |
-        SHORT_SHA=$(git rev-parse --short HEAD)
-        STAGE_LABEL="${{ steps.stage.outputs.stage_label }}"
-        TAG_NAME="nanvix-v${{ env.GCC_VERSION }}-${SHORT_SHA}-${STAGE_LABEL}"
-        RELEASE_NAME="nanvix-gcc-${{ env.GCC_VERSION }}-${SHORT_SHA}-${STAGE_LABEL}"
-        GCC_BRANCH="nanvix/v${{ env.GCC_VERSION }}"
-        echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-        echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-        echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
-        echo "gcc_branch=${GCC_BRANCH}" >> $GITHUB_OUTPUT
-
-    - name: Check if release already exists
-      id: check_release
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        TAG_NAME="${{ steps.commit_info.outputs.tag_name }}"
-        if git tag -l "${TAG_NAME}" | grep -q .; then
-          echo "tag_exists=true" >> $GITHUB_OUTPUT
-          if gh release view "${TAG_NAME}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Release ${TAG_NAME} already exists, skipping."
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Tag ${TAG_NAME} exists but GitHub Release does not; continuing to recover from partial previous run."
-          fi
-        else
-          echo "tag_exists=false" >> $GITHUB_OUTPUT
-          echo "exists=false" >> $GITHUB_OUTPUT
         fi
 
     #----------------------------------------------------------------------------------------------
-    # Download Dependencies
+    # Update Pinned Versions in z Script
     #----------------------------------------------------------------------------------------------
 
-    - name: Download Binutils release
-      if: steps.check_release.outputs.exists == 'false'
+    - name: Parse incoming release tags
+      id: parse_tags
       run: |
         set -euo pipefail
+
+        # Parse binutils tag (format: nanvix-v<version>-<short_hash>)
         BINUTILS_TAG="${{ github.event.client_payload.binutils_tag }}"
-        echo "Fetching Binutils release: ${BINUTILS_TAG}..."
-        RELEASE_JSON=$(curl -fsS \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/nanvix/binutils/releases/tags/${BINUTILS_TAG}")
-
-        ASSET_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | test("nanvix-binutils-.*\\.tar\\.bz2$")) | .browser_download_url' | head -n1)
-        if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-          echo "::error::No binutils tarball asset found for tag ${BINUTILS_TAG}"
+        if [[ "$BINUTILS_TAG" =~ ^nanvix-v([0-9.]+)-([a-f0-9]+)$ ]]; then
+          echo "binutils_version=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+          echo "binutils_hash=${BASH_REMATCH[2]}" >> $GITHUB_OUTPUT
+        else
+          echo "::error::Failed to parse binutils tag: ${BINUTILS_TAG}"
           exit 1
         fi
-        echo "Downloading Binutils from: $ASSET_URL"
 
-        curl -fsS -L -o /tmp/nanvix-binutils.tar.bz2 "$ASSET_URL"
-        sudo mkdir -p ${{ env.INSTALL_LOCATION }}
-        sudo tar -xjf /tmp/nanvix-binutils.tar.bz2 -C ${{ env.INSTALL_LOCATION }}
-        echo "Binutils extracted to ${{ env.INSTALL_LOCATION }}"
+        # Parse newlib tag if present (format: nanvix-v<version>-<short_hash>)
+        NEWLIB_TAG="${{ github.event.client_payload.newlib_tag }}"
+        if [ -n "$NEWLIB_TAG" ]; then
+          if [[ "$NEWLIB_TAG" =~ ^nanvix-v([0-9.]+)-([a-f0-9]+)$ ]]; then
+            echo "newlib_version=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+            echo "newlib_hash=${BASH_REMATCH[2]}" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Failed to parse newlib tag: ${NEWLIB_TAG}"
+            exit 1
+          fi
+        fi
 
-    - name: Download NewLib release
-      if: steps.check_release.outputs.exists == 'false' && steps.stage.outputs.stage == '1'
+    - name: Download tarballs and compute checksums
+      id: checksums
       run: |
         set -euo pipefail
-        NEWLIB_TAG="${{ github.event.client_payload.newlib_tag }}"
-        echo "Fetching NewLib release: ${NEWLIB_TAG}..."
-        RELEASE_JSON=$(curl -fsS \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/nanvix/newlib/releases/tags/${NEWLIB_TAG}")
 
-        ASSET_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | test("nanvix-newlib-.*\\.tar\\.bz2$")) | .browser_download_url' | head -n1)
-        if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-          echo "::error::No newlib tarball asset found for tag ${NEWLIB_TAG}"
-          exit 1
+        BINUTILS_VERSION="${{ steps.parse_tags.outputs.binutils_version }}"
+        BINUTILS_HASH="${{ steps.parse_tags.outputs.binutils_hash }}"
+        BINUTILS_URL="https://github.com/nanvix/binutils/releases/download/nanvix-v${BINUTILS_VERSION}-${BINUTILS_HASH}/nanvix-binutils-${BINUTILS_VERSION}-${BINUTILS_HASH}.tar.bz2"
+
+        echo "Downloading Binutils tarball to compute checksum..."
+        curl -fsSL -o /tmp/nanvix-binutils.tar.bz2 "$BINUTILS_URL"
+        BINUTILS_SHA256=$(sha256sum /tmp/nanvix-binutils.tar.bz2 | awk '{print $1}')
+        echo "binutils_sha256=${BINUTILS_SHA256}" >> $GITHUB_OUTPUT
+        echo "Binutils SHA256: ${BINUTILS_SHA256}"
+
+        NEWLIB_VERSION="${{ steps.parse_tags.outputs.newlib_version }}"
+        NEWLIB_HASH="${{ steps.parse_tags.outputs.newlib_hash }}"
+        if [ -n "$NEWLIB_VERSION" ] && [ -n "$NEWLIB_HASH" ]; then
+          NEWLIB_URL="https://github.com/nanvix/newlib/releases/download/nanvix-v${NEWLIB_VERSION}-${NEWLIB_HASH}/nanvix-newlib-${NEWLIB_VERSION}-${NEWLIB_HASH}.tar.bz2"
+
+          echo "Downloading NewLib tarball to compute checksum..."
+          curl -fsSL -o /tmp/nanvix-newlib.tar.bz2 "$NEWLIB_URL"
+          NEWLIB_SHA256=$(sha256sum /tmp/nanvix-newlib.tar.bz2 | awk '{print $1}')
+          echo "newlib_sha256=${NEWLIB_SHA256}" >> $GITHUB_OUTPUT
+          echo "NewLib SHA256: ${NEWLIB_SHA256}"
         fi
-        echo "Downloading NewLib from: $ASSET_URL"
 
-        curl -fsS -L -o /tmp/nanvix-newlib.tar.bz2 "$ASSET_URL"
-        sudo tar -xjf /tmp/nanvix-newlib.tar.bz2 -C ${{ env.INSTALL_LOCATION }}
-        echo "NewLib extracted to ${{ env.INSTALL_LOCATION }}"
+    - name: Update z script with new versions
+      id: update_z
+      run: |
+        set -euo pipefail
+
+        BINUTILS_VERSION="${{ steps.parse_tags.outputs.binutils_version }}"
+        BINUTILS_HASH="${{ steps.parse_tags.outputs.binutils_hash }}"
+        BINUTILS_SHA256="${{ steps.checksums.outputs.binutils_sha256 }}"
+
+        # Update Binutils version and hash.
+        sed -i "s|^readonly BINUTILS_VERSION=.*|readonly BINUTILS_VERSION=\"${BINUTILS_VERSION}\"|" z
+        sed -i "s|^readonly BINUTILS_SHORT_COMMIT_HASH=.*|readonly BINUTILS_SHORT_COMMIT_HASH=\"${BINUTILS_HASH}\"|" z
+        sed -i "s|^readonly BINUTILS_SHA256_CHECKSUM=.*|readonly BINUTILS_SHA256_CHECKSUM=\"sha256:${BINUTILS_SHA256}\"|" z
+
+        # Update NewLib if this is a newlib-release event.
+        NEWLIB_VERSION="${{ steps.parse_tags.outputs.newlib_version }}"
+        NEWLIB_HASH="${{ steps.parse_tags.outputs.newlib_hash }}"
+        NEWLIB_SHA256="${{ steps.checksums.outputs.newlib_sha256 }}"
+        if [ -n "$NEWLIB_VERSION" ] && [ -n "$NEWLIB_HASH" ]; then
+          sed -i "s|^readonly NEWLIB_VERSION=.*|readonly NEWLIB_VERSION=\"${NEWLIB_VERSION}\"|" z
+          sed -i "s|^readonly NEWLIB_SHORT_COMMIT_HASH=.*|readonly NEWLIB_SHORT_COMMIT_HASH=\"${NEWLIB_HASH}\"|" z
+          sed -i "s|^readonly NEWLIB_SHA256_CHECKSUM=.*|readonly NEWLIB_SHA256_CHECKSUM=\"sha256:${NEWLIB_SHA256}\"|" z
+        fi
+
+        # Show diff for logging.
+        git diff z
 
     #----------------------------------------------------------------------------------------------
-    # Build
+    # CI Validation
     #----------------------------------------------------------------------------------------------
 
     - name: Restore sccache cache
-      if: steps.check_release.outputs.exists == 'false'
       uses: actions/cache@v4
       with:
         path: ~/.cache/sccache
-        key: ${{ runner.os }}-sccache-release-${{ steps.stage.outputs.stage_label }}-${{ github.sha }}
+        key: ${{ runner.os }}-sccache-update-deps-${{ steps.stage.outputs.stage_label }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-sccache-release-${{ steps.stage.outputs.stage_label }}-
+          ${{ runner.os }}-sccache-update-deps-${{ steps.stage.outputs.stage_label }}-
           ${{ runner.os }}-sccache
 
     - name: Enable compiler caching
-      if: steps.check_release.outputs.exists == 'false'
       uses: mozilla-actions/sccache-action@v0.0.9
 
     - name: Install dependencies
-      if: steps.check_release.outputs.exists == 'false'
       run: sudo ./z setup
 
-    - name: Configure build
-      if: steps.check_release.outputs.exists == 'false'
-      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }} --sysroot-location=${{ env.INSTALL_LOCATION }} --release-name=${{ steps.commit_info.outputs.release_name }} --stage=${{ steps.stage.outputs.stage }}
+    - name: Configure GCC (stage 0)
+      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }} --stage=0
 
-    - name: Build
-      if: steps.check_release.outputs.exists == 'false'
+    - name: Build GCC (stage 0)
       run: ./z build
 
-    - name: Install
-      if: steps.check_release.outputs.exists == 'false'
+    - name: Configure GCC (stage 1)
+      if: steps.stage.outputs.stage == '1'
+      run: ./z configure --install-location=${{ env.INSTALL_LOCATION }} --stage=1
+
+    - name: Build GCC (stage 1)
+      if: steps.stage.outputs.stage == '1'
+      run: ./z build
+
+    - name: Install GCC
+      if: steps.stage.outputs.stage == '1'
       run: ./z install
 
-    #----------------------------------------------------------------------------------------------
-    # Smoke Test (stage 1 only)
-    #----------------------------------------------------------------------------------------------
-
-    - name: Cross-compile hello-world
-      if: steps.check_release.outputs.exists == 'false' && steps.stage.outputs.stage == '1'
+    - name: Enable KVM
+      if: steps.stage.outputs.stage == '1'
       run: |
-        export PATH="${{ env.INSTALL_LOCATION }}/bin:$PATH"
-        i686-nanvix-gcc -o /tmp/hello tests/hello.c
-        echo "Cross-compilation succeeded."
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+        ls -l /dev/kvm
 
-    - name: Verify ELF output
-      if: steps.check_release.outputs.exists == 'false' && steps.stage.outputs.stage == '1'
+    - name: Verify GCC installation
+      if: steps.stage.outputs.stage == '1'
+      run: ./z verify
+
+    - name: "Smoke test: compile and link C"
+      if: steps.stage.outputs.stage == '1'
+      run: ./z test
+
+    #----------------------------------------------------------------------------------------------
+    # Open Pull Request
+    #----------------------------------------------------------------------------------------------
+
+    - name: Create branch and open PR
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
-        export PATH="${{ env.INSTALL_LOCATION }}/bin:$PATH"
-        i686-nanvix-readelf -h /tmp/hello | grep -q ELF
-        echo "ELF verification passed."
+        set -euo pipefail
 
-    #----------------------------------------------------------------------------------------------
-    # Release Artifacts
-    #----------------------------------------------------------------------------------------------
+        EVENT_TYPE="${{ github.event.action }}"
+        BINUTILS_TAG="${{ github.event.client_payload.binutils_tag }}"
+        NEWLIB_TAG="${{ github.event.client_payload.newlib_tag }}"
 
-    - name: Create release archive
-      if: steps.check_release.outputs.exists == 'false'
-      run: ./z release
+        BRANCH_NAME="deps/update-${EVENT_TYPE}-$(date +%Y%m%d-%H%M%S)"
 
-    #----------------------------------------------------------------------------------------------
-    # Docker Image
-    #----------------------------------------------------------------------------------------------
+        git checkout -b "$BRANCH_NAME"
+        git add z
+        git commit -m "deps: update pinned versions from ${EVENT_TYPE}
 
-    - name: Prepare Docker context
-      if: steps.check_release.outputs.exists == 'false'
-      run: |
-        mkdir -p ./docker-install
-        cp -r "${{ env.INSTALL_LOCATION }}/." ./docker-install/
+Triggered by ${EVENT_TYPE} dispatch.
+Binutils tag: ${BINUTILS_TAG}
+Newlib tag: ${NEWLIB_TAG:-N/A}"
 
-    - name: Set up Docker Buildx
-      if: steps.check_release.outputs.exists == 'false'
-      uses: docker/setup-buildx-action@v3
+        git push origin "$BRANCH_NAME"
 
-    - name: Login to GHCR
-      if: steps.check_release.outputs.exists == 'false'
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        PR_TITLE="deps: update pinned versions from ${EVENT_TYPE}"
+        PR_BODY="Automated PR to update dependency versions in the \`z\` script.
 
-    - name: Determine Docker tags
-      if: steps.check_release.outputs.exists == 'false'
-      id: docker_tags
-      run: |
-        SHORT_SHA="${{ steps.commit_info.outputs.short_sha }}"
-        STAGE="${{ steps.stage.outputs.stage }}"
-        if [ "$STAGE" = "0" ]; then
-          echo "tags=ghcr.io/nanvix/gcc:stage0-latest,ghcr.io/nanvix/gcc:stage0-${SHORT_SHA}" >> $GITHUB_OUTPUT
-        else
-          echo "tags=ghcr.io/nanvix/gcc:latest,ghcr.io/nanvix/gcc:${SHORT_SHA}" >> $GITHUB_OUTPUT
-        fi
+**Triggered by:** \`${EVENT_TYPE}\` repository dispatch
+**Binutils tag:** \`${BINUTILS_TAG}\`
+**Newlib tag:** \`${NEWLIB_TAG:-N/A}\`
 
-    - name: Build and push Docker image
-      if: steps.check_release.outputs.exists == 'false'
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.docker_tags.outputs.tags }}
+CI validation passed before opening this PR."
 
-    - name: Make package public
-      if: steps.check_release.outputs.exists == 'false'
-      run: |
-        curl -fsS -X PATCH \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/orgs/${{ github.repository_owner }}/packages/container/gcc" \
-          -d '{"visibility":"public"}' || true
-
-    #----------------------------------------------------------------------------------------------
-    # Git Operations
-    #----------------------------------------------------------------------------------------------
-
-    - name: Fast-forward release branch
-      if: steps.check_release.outputs.exists == 'false'
-      run: |
-        git fetch origin
-        git checkout -B ${{ steps.commit_info.outputs.gcc_branch }} origin/dev
-        git push origin ${{ steps.commit_info.outputs.gcc_branch }}
-
-    - name: Create release tag
-      if: steps.check_release.outputs.exists == 'false' && steps.check_release.outputs.tag_exists == 'false'
-      run: |
-        git tag ${{ steps.commit_info.outputs.tag_name }}
-        git push origin ${{ steps.commit_info.outputs.tag_name }}
-
-    - name: Create GitHub Release
-      if: steps.check_release.outputs.exists == 'false'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.commit_info.outputs.tag_name }}
-        name: "${{ steps.commit_info.outputs.tag_name }}"
-        body: |
-          Automated release of Nanvix GCC ${{ env.GCC_VERSION }} (${{ steps.stage.outputs.stage_label }})
-
-          Built from commit: ${{ steps.commit_info.outputs.short_sha }}
-          Triggered by: ${{ github.event.action }}
-
-          This release contains the GCC toolchain configured for the Nanvix operating system target (i686-nanvix).
-
-          **Artifacts:**
-          - Tarball: `${{ steps.commit_info.outputs.release_name }}.tar.bz2`
-          - Docker: `${{ steps.docker_tags.outputs.tags }}`
-        files: |
-          ${{ steps.commit_info.outputs.release_name }}.tar.bz2
-        draft: false
-        prerelease: false
-
-    #----------------------------------------------------------------------------------------------
-    # Cross-Repository Dispatch
-    #----------------------------------------------------------------------------------------------
-
-    - name: Dispatch to next repository
-      if: steps.check_release.outputs.exists == 'false'
-      run: |
-        curl -fsS -X POST \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${{ secrets.DISPATCH_TOKEN }}" \
-          https://api.github.com/repos/${{ steps.stage.outputs.dispatch_target }}/dispatches \
-          -d '{
-            "event_type": "${{ steps.stage.outputs.dispatch_event }}",
-            "client_payload": {
-              "gcc_version": "${{ env.GCC_VERSION }}",
-              "gcc_tag": "${{ steps.commit_info.outputs.tag_name }}",
-              "gcc_sha": "${{ steps.commit_info.outputs.short_sha }}",
-              "gcc_stage": "${{ steps.stage.outputs.stage }}",
-              "binutils_tag": "${{ github.event.client_payload.binutils_tag }}",
-              "newlib_tag": "${{ github.event.client_payload.newlib_tag }}"
-            }
-          }'
+        gh pr create \
+          --base dev \
+          --head "$BRANCH_NAME" \
+          --title "$PR_TITLE" \
+          --body "$PR_BODY"
