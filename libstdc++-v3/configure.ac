@@ -393,39 +393,55 @@ else
         AC_DEFINE(HAVE_USLEEP)
         ;;
     esac
+
+    # Newlib provides 80-bit long-double math on i386/x86_64.  Define
+    # the HAVE_*L macros so that the long-double stubs in
+    # src/c++98/math_stubs_long_double.cc are suppressed and do not
+    # conflict with newlib libm.a's strong definitions at static link
+    # time.
+    #
+    # Previously this set of AC_DEFINE calls lived in a block guarded by
+    #   if test x"long_double_math_on_this_cpu" = x"yes"; then ...
+    # which compares the literal string "long_double_math_on_this_cpu"
+    # against "yes" (the leading `$` was omitted) and is therefore
+    # permanently false.  The block carried a "for the time being, punt"
+    # comment since libstdc++'s introduction; promote it to a real CPU
+    # check now, scoped to newlib targets so non-newlib cross builds
+    # (which reach this file via GLIBCXX_CROSSCONFIG in the elif below)
+    # are unaffected.
+    case "${target_cpu}" in
+      i[[3456789]]86 | x86_64)
+        AC_DEFINE(HAVE_ACOSL)
+        AC_DEFINE(HAVE_ASINL)
+        AC_DEFINE(HAVE_ATAN2L)
+        AC_DEFINE(HAVE_ATANL)
+        AC_DEFINE(HAVE_CEILL)
+        AC_DEFINE(HAVE_COSL)
+        AC_DEFINE(HAVE_COSHL)
+        AC_DEFINE(HAVE_EXPL)
+        AC_DEFINE(HAVE_FABSL)
+        AC_DEFINE(HAVE_FLOORL)
+        AC_DEFINE(HAVE_FMODL)
+        AC_DEFINE(HAVE_FREXPL)
+        AC_DEFINE(HAVE_HYPOTL)
+        AC_DEFINE(HAVE_LDEXPL)
+        AC_DEFINE(HAVE_LOG10L)
+        AC_DEFINE(HAVE_LOGL)
+        AC_DEFINE(HAVE_MODFL)
+        AC_DEFINE(HAVE_POWL)
+        AC_DEFINE(HAVE_SINCOSL)
+        AC_DEFINE(HAVE_SINL)
+        AC_DEFINE(HAVE_SINHL)
+        AC_DEFINE(HAVE_SQRTL)
+        AC_DEFINE(HAVE_TANL)
+        AC_DEFINE(HAVE_TANHL)
+        ;;
+    esac
   elif test "x$with_headers" != "xno"; then
     GLIBCXX_CROSSCONFIG
   fi
-
-  # At some point, we should differentiate between architectures
-  # like x86, which have long double versions, and alpha/powerpc/etc.,
-  # which don't. For the time being, punt.
-  if test x"long_double_math_on_this_cpu" = x"yes"; then
-    AC_DEFINE(HAVE_ACOSL)
-    AC_DEFINE(HAVE_ASINL)
-    AC_DEFINE(HAVE_ATAN2L)
-    AC_DEFINE(HAVE_ATANL)
-    AC_DEFINE(HAVE_CEILL)
-    AC_DEFINE(HAVE_COSL)
-    AC_DEFINE(HAVE_COSHL)
-    AC_DEFINE(HAVE_EXPL)
-    AC_DEFINE(HAVE_FABSL)
-    AC_DEFINE(HAVE_FLOORL)
-    AC_DEFINE(HAVE_FMODL)
-    AC_DEFINE(HAVE_FREXPL)
-    AC_DEFINE(HAVE_LDEXPL)
-    AC_DEFINE(HAVE_LOG10L)
-    AC_DEFINE(HAVE_LOGL)
-    AC_DEFINE(HAVE_MODFL)
-    AC_DEFINE(HAVE_POWL)
-    AC_DEFINE(HAVE_SINCOSL)
-    AC_DEFINE(HAVE_SINL)
-    AC_DEFINE(HAVE_SINHL)
-    AC_DEFINE(HAVE_SQRTL)
-    AC_DEFINE(HAVE_TANL)
-    AC_DEFINE(HAVE_TANHL)
-  fi
 fi
+
 
 # Check for _Unwind_GetIPInfo.
 GCC_CHECK_UNWIND_GETIPINFO
