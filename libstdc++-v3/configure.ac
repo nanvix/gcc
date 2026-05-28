@@ -368,7 +368,38 @@ else
     AC_DEFINE(HAVE_TANHF)
 
     AC_DEFINE(HAVE_ICONV)
-    AC_DEFINE(HAVE_MEMALIGN)
+
+    case "${target}" in
+      *-nanvix*)
+        ;;
+      *)
+        AC_DEFINE(HAVE_MEMALIGN)
+        ;;
+    esac
+
+    # On nanvix, newlib's headers declare a number of POSIX functions
+    # whose implementations are not provided by the sysroot.  The
+    # autoconf link-tests in GLIBCXX_CHECK_FILESYSTEM_DEPS (acinclude.m4)
+    # and AC_CHECK_FUNCS(posix_memalign) (configure.ac) then succeed
+    # and AC_DEFINE the corresponding HAVE_* macros, leaving libstdc++
+    # objects with undefined references that the loader cannot
+    # resolve.  Pre-seed the AC_CACHE_CHECK cache variables to "no"
+    # for *-nanvix* so the checks are skipped and the matching
+    # HAVE_* macros stay undefined.  Required entries cover symbols
+    # observed in libstdc++.a's undefined list (fchmodat, unlinkat,
+    # dirfd, posix_memalign); the remaining entries are defensive
+    # against future newlib header changes.
+    case "${target}" in
+      *-nanvix*)
+        glibcxx_cv_fchmodat=no
+        glibcxx_cv_unlinkat=no
+        glibcxx_cv_dirfd=no
+        glibcxx_cv_openat=no
+        glibcxx_cv_fdopendir=no
+        ac_cv_func_posix_memalign=no
+        ac_cv_header_sys_statvfs_h=no
+        ;;
+    esac
 
     case "${target}" in
       *-rtems*)

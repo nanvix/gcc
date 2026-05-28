@@ -29330,8 +29330,31 @@ else
 
     $as_echo "#define HAVE_ICONV 1" >>confdefs.h
 
-    $as_echo "#define HAVE_MEMALIGN 1" >>confdefs.h
 
+    case "${target}" in
+      *-nanvix*)
+        ;;
+      *)
+        $as_echo "#define HAVE_MEMALIGN 1" >>confdefs.h
+
+        ;;
+    esac
+
+    # On nanvix, newlib's headers declare a number of POSIX functions
+    # whose implementations are not provided by the sysroot.  Pre-seed
+    # the AC_CACHE_CHECK cache variables to "no" so the link tests are
+    # skipped and the matching HAVE_* macros stay undefined.
+    case "${target}" in
+      *-nanvix*)
+        glibcxx_cv_fchmodat=no
+        glibcxx_cv_unlinkat=no
+        glibcxx_cv_dirfd=no
+        glibcxx_cv_openat=no
+        glibcxx_cv_fdopendir=no
+        ac_cv_func_posix_memalign=no
+        ac_cv_header_sys_statvfs_h=no
+        ;;
+    esac
 
     case "${target}" in
       *-rtems*)
