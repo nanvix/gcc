@@ -163,61 +163,83 @@ download_steps() {
         fi
     fi
 
-    # Download Nanvix release if any required artifact is missing.
+    return 0
+}
+
+#
+# Description
+#
+#   Downloads Nanvix OS artifacts (libposix.a, user.ld, and the nanvixd
+#   binaries) used by the smoke, integration, and verification steps. These
+#   artifacts come from the nanvix/nanvix release and are not required to build
+#   or install the compiler itself, so they are fetched on demand rather than at
+#   configure time. This keeps `z configure` free of the `gh` dependency, which
+#   in turn lets the compiler be built in minimal environments (e.g. container
+#   image builds) without authenticating to GitHub.
+#
+# Return Value
+#
+#   - On success, this function returns zero.
+#   - On failure, this function returns non-zero.
+#
+download_nanvix_os_artifacts() {
     local install_location="${Z_INSTALL_LOCATION}"
-    if [[ ! -f "${install_location}/lib/libposix.a" ]] || \
-       [[ ! -f "${install_location}/lib/user.ld" ]] || \
-       [[ ! -f "${install_location}/libexec/nanvixd/nanvixd.elf" ]] || \
-       [[ ! -f "${install_location}/libexec/nanvixd/kernel.elf" ]] || \
-       [[ ! -f "${install_location}/libexec/nanvixd/linuxd.elf" ]] || \
-       [[ ! -f "${install_location}/libexec/nanvixd/uservm.elf" ]]; then
-        echo "Downloading Nanvix release ${NANVIX_RELEASE_TAG}..."
-        local nanvix_dir
-        nanvix_dir="$(mktemp -d)"
-        # Ensure cleanup on any failure path.
-        # shellcheck disable=SC2064
-        trap "rm -rf \"$nanvix_dir\"" RETURN
-        local -a gh_args=("--repo" "nanvix/nanvix" "--pattern" "${NANVIX_RELEASE_PATTERN}" "--dir" "$nanvix_dir")
-        if [[ "${NANVIX_RELEASE_TAG}" != "latest" ]]; then
-            gh_args=("${NANVIX_RELEASE_TAG}" "${gh_args[@]}")
-        fi
-        gh release download "${gh_args[@]}" || {
-            echo "ERROR: Failed to download Nanvix release. Ensure 'gh' is installed and authenticated."
-            return 1
-        }
-        local archive
-        archive=$(find "$nanvix_dir" -maxdepth 1 -name "${NANVIX_RELEASE_PATTERN}")
-        if [[ -z "$archive" ]]; then
-            echo "ERROR: No matching archive found in download directory."
-            return 1
-        fi
-        if [[ $(echo "$archive" | wc -l) -ne 1 ]]; then
-            echo "ERROR: Multiple matching archives found; expected exactly one."
-            return 1
-        fi
-        # Verify archive integrity.
-        echo "${NANVIX_RELEASE_SHA256}  ${archive}" | sha256sum -c --quiet || {
-            echo "ERROR: Checksum verification failed for Nanvix release archive."
-            return 1
-        }
-        extract_tar_bz2 "$archive" "$nanvix_dir" || {
-            echo "ERROR: Failed to extract Nanvix release archive."
-            return 1
-        }
-        mkdir -p "${install_location}/lib"
-        install -m 644 "$nanvix_dir/lib/libposix.a" "${install_location}/lib/"
-        install -m 644 "$nanvix_dir/lib/user.ld" "${install_location}/lib/"
-        # Install nanvixd binaries for integration tests.
-        mkdir -p "${install_location}/libexec/nanvixd"
-        install -m 755 "$nanvix_dir/bin/nanvixd.elf" "${install_location}/libexec/nanvixd/"
-        install -m 755 "$nanvix_dir/bin/kernel.elf" "${install_location}/libexec/nanvixd/"
-        install -m 755 "$nanvix_dir/bin/linuxd.elf" "${install_location}/libexec/nanvixd/"
-        install -m 755 "$nanvix_dir/bin/uservm.elf" "${install_location}/libexec/nanvixd/"
-        trap - RETURN
-        rm -rf "$nanvix_dir"
-    else
+
+    # Skip the download if every required artifact is already present.
+    if [[ -f "${install_location}/lib/libposix.a" ]] && \
+       [[ -f "${install_location}/lib/user.ld" ]] && \
+       [[ -f "${install_location}/libexec/nanvixd/nanvixd.elf" ]] && \
+       [[ -f "${install_location}/libexec/nanvixd/kernel.elf" ]] && \
+       [[ -f "${install_location}/libexec/nanvixd/linuxd.elf" ]] && \
+       [[ -f "${install_location}/libexec/nanvixd/uservm.elf" ]]; then
         echo "Nanvix OS libraries already present in '${install_location}/lib/'."
+        return 0
     fi
+
+    echo "Downloading Nanvix release ${NANVIX_RELEASE_TAG}..."
+    local nanvix_dir
+    nanvix_dir="$(mktemp -d)"
+    # Ensure cleanup on any failure path.
+    # shellcheck disable=SC2064
+    trap "rm -rf \"$nanvix_dir\"" RETURN
+    local -a gh_args=("--repo" "nanvix/nanvix" "--pattern" "${NANVIX_RELEASE_PATTERN}" "--dir" "$nanvix_dir")
+    if [[ "${NANVIX_RELEASE_TAG}" != "latest" ]]; then
+        gh_args=("${NANVIX_RELEASE_TAG}" "${gh_args[@]}")
+    fi
+    gh release download "${gh_args[@]}" || {
+        echo "ERROR: Failed to download Nanvix release. Ensure 'gh' is installed and authenticated."
+        return 1
+    }
+    local archive
+    archive=$(find "$nanvix_dir" -maxdepth 1 -name "${NANVIX_RELEASE_PATTERN}")
+    if [[ -z "$archive" ]]; then
+        echo "ERROR: No matching archive found in download directory."
+        return 1
+    fi
+    if [[ $(echo "$archive" | wc -l) -ne 1 ]]; then
+        echo "ERROR: Multiple matching archives found; expected exactly one."
+        return 1
+    fi
+    # Verify archive integrity.
+    echo "${NANVIX_RELEASE_SHA256}  ${archive}" | sha256sum -c --quiet || {
+        echo "ERROR: Checksum verification failed for Nanvix release archive."
+        return 1
+    }
+    extract_tar_bz2 "$archive" "$nanvix_dir" || {
+        echo "ERROR: Failed to extract Nanvix release archive."
+        return 1
+    }
+    mkdir -p "${install_location}/lib"
+    install -m 644 "$nanvix_dir/lib/libposix.a" "${install_location}/lib/"
+    install -m 644 "$nanvix_dir/lib/user.ld" "${install_location}/lib/"
+    # Install nanvixd binaries for integration tests.
+    mkdir -p "${install_location}/libexec/nanvixd"
+    install -m 755 "$nanvix_dir/bin/nanvixd.elf" "${install_location}/libexec/nanvixd/"
+    install -m 755 "$nanvix_dir/bin/kernel.elf" "${install_location}/libexec/nanvixd/"
+    install -m 755 "$nanvix_dir/bin/linuxd.elf" "${install_location}/libexec/nanvixd/"
+    install -m 755 "$nanvix_dir/bin/uservm.elf" "${install_location}/libexec/nanvixd/"
+    trap - RETURN
+    rm -rf "$nanvix_dir"
 
     return 0
 }
@@ -464,6 +486,12 @@ test_integration_c() {
 test_steps() {
     local smoke_bin
 
+    # Ensure Nanvix OS test fixtures are available (fetched on demand).
+    download_nanvix_os_artifacts || {
+        print_error "Failed to download Nanvix OS test artifacts."
+        return 1
+    }
+
     # Run smoke test: compile hello.c
     smoke_bin="$(test_smoke_c)" || {
         print_error "Smoke test failed."
@@ -507,6 +535,12 @@ verify_steps() {
     local install_location="${Z_INSTALL_LOCATION}"
     local target="${Z_TARGET}"
     local missing=0
+
+    # Ensure Nanvix OS artifacts are available before verifying them.
+    download_nanvix_os_artifacts || {
+        print_error "Failed to download Nanvix OS artifacts."
+        return 1
+    }
 
     # Expected compiler binaries.
     local -a expected_binaries=(
